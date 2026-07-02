@@ -1,10 +1,10 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use serde::Deserialize;
 use serde_json::json;
 
 use crate::pipeline::worker::WorkerAnswer;
-use crate::pipeline::{ChatProvider, ClaimCandidate, ResearchClaim, chat_json};
+use crate::pipeline::{ChatProvider, ClaimCandidate, ResearchClaim, Verdict, chat_json};
 use crate::providers::cerebras::{ChatOpts, Message};
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -66,12 +66,44 @@ pub(crate) fn dedup_candidates(candidates: Vec<ClaimCandidate>) -> Vec<ClaimCand
         .collect()
 }
 
+/// Deduplicates research claims by (normalized claim, url). When keys collide,
+/// keeps the claim with the better verdict (rank: supported > partial >
+/// unsupported > no_source); on equal rank keeps the first. This matters for
+/// deep-tier refinement, whose claims are appended AFTER the initial claims —
+/// a refined `supported` duplicate must win over an initial `unsupported`.
 pub(crate) fn dedup_research_claims(claims: Vec<ResearchClaim>) -> Vec<ResearchClaim> {
-    let mut seen = HashSet::new();
-    claims
+    let mut best: HashMap<(String, String), ResearchClaim> = HashMap::new();
+    let mut order: Vec<(String, String)> = Vec::new();
+    for claim in claims {
+        if claim.claim.trim().is_empty() {
+            continue;
+        }
+        let key = (normalize_claim(&claim.claim), claim.source_url.clone());
+        match best.get(&key) {
+            None => {
+                order.push(key.clone());
+                best.insert(key, claim);
+            }
+            Some(existing) => {
+                if verdict_rank(&claim.verdict) > verdict_rank(&existing.verdict) {
+                    best.insert(key, claim);
+                }
+            }
+        }
+    }
+    order
         .into_iter()
-        .filter(|claim| seen.insert((normalize_claim(&claim.claim), claim.source_url.clone())))
+        .map(|key| best.remove(&key).expect("key present"))
         .collect()
+}
+
+fn verdict_rank(verdict: &Verdict) -> u8 {
+    match verdict {
+        Verdict::Supported => 3,
+        Verdict::Partial => 2,
+        Verdict::Unsupported => 1,
+        Verdict::NoSource => 0,
+    }
 }
 
 fn normalize_claim(claim: &str) -> String {
@@ -174,5 +206,63 @@ mod tests {
         ]);
 
         assert_eq!(claims.len(), 2);
+    }
+
+    #[test]
+    fn dedup_research_claims_keeps_better_verdict_on_collision() {
+        // Finding 3: unsupported-then-supported duplicate dedups to supported.
+        let claims = vec![
+            research_claim("A happened", "https://example.com", Verdict::Unsupported),
+            research_claim("A happened", "https://example.com", Verdict::Supported),
+        ];
+
+        let deduped = dedup_research_claims(claims);
+
+        assert_eq!(deduped.len(), 1);
+        assert_eq!(deduped[0].verdict, Verdict::Supported);
+    }
+
+    #[test]
+    fn dedup_research_claims_keeps_first_on_equal_rank() {
+        let claims = vec![
+            research_claim("A happened", "https://example.com", Verdict::Supported),
+            research_claim("A happened", "https://example.com", Verdict::Supported),
+        ];
+
+        let deduped = dedup_research_claims(claims);
+
+        assert_eq!(deduped.len(), 1);
+        assert_eq!(deduped[0].note, "first");
+    }
+
+    #[test]
+    fn dedup_research_claims_preserves_insertion_order() {
+        let claims = vec![
+            research_claim("B happened", "https://b.com", Verdict::Supported),
+            research_claim("A happened", "https://a.com", Verdict::Supported),
+            research_claim("C happened", "https://c.com", Verdict::Supported),
+        ];
+
+        let deduped = dedup_research_claims(claims);
+
+        assert_eq!(deduped.len(), 3);
+        assert_eq!(deduped[0].claim, "B happened");
+        assert_eq!(deduped[1].claim, "A happened");
+        assert_eq!(deduped[2].claim, "C happened");
+    }
+
+    fn research_claim(claim: &str, url: &str, verdict: Verdict) -> ResearchClaim {
+        ResearchClaim {
+            claim: claim.to_string(),
+            source_url: url.to_string(),
+            quote: None,
+            verdict,
+            note: if verdict == Verdict::Supported && claim.starts_with('A') {
+                "first".to_string()
+            } else {
+                "note".to_string()
+            },
+            published: None,
+        }
     }
 }

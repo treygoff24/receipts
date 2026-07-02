@@ -15,6 +15,10 @@ pub const DECOMPOSE_WORST_CASE_COST: f64 = 0.001;
 pub const WORKER_ROUND_WORST_CASE_COST: f64 = 0.03;
 /// Measured worst-case launch costs from the validated `swarm.py` prototype.
 pub const VERIFICATION_WORST_CASE_COST: f64 = 0.002;
+/// Measured prototype extraction ≈ $0.005, rounded up.
+pub const EXTRACT_WORST_CASE_COST: f64 = 0.01;
+/// Measured prototype contents fetch ≈ $0.003, rounded up.
+pub const CONTENTS_WORST_CASE_COST: f64 = 0.005;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkerTask {

@@ -15,8 +15,8 @@ use crate::providers::cerebras::{CerebrasClient, ChatOpts, ChatResponse, Message
 use crate::providers::exa::SearchProvider;
 use crate::providers::{SharedSpend, new_spend};
 use crate::tiers::{
-    DECOMPOSE_WORST_CASE_COST, Depth, WORKER_ROUND_WORST_CASE_COST, dead_subquestions,
-    initial_worker_tasks, refinement_tasks,
+    DECOMPOSE_WORST_CASE_COST, EXTRACT_WORST_CASE_COST, Depth, WORKER_ROUND_WORST_CASE_COST,
+    dead_subquestions, initial_worker_tasks, refinement_tasks,
 };
 
 pub use verify::VerifyPolicy;
@@ -120,10 +120,22 @@ pub(crate) struct ClaimCandidate {
     pub url: String,
 }
 
+/// Internal verification result that retains the subquestion attribution from
+/// the originating `ClaimCandidate`. This is what `verify_candidates` returns
+/// so the deep-tier refinement logic can derive `dead_subquestions` from the
+/// carried attribution instead of a positional zip (which breaks when
+/// `run_chunked` drops a panicked thread).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct VerifiedClaim {
+    pub subquestion: String,
+    pub claim: ResearchClaim,
+}
+
 #[derive(Clone)]
 pub(crate) struct SharedState {
     pub spend: SharedSpend,
     pub budget_gate: Arc<Mutex<()>>,
+    // lock order: source_cache before source_meta — keep it consistent to avoid deadlock.
     pub source_cache: SourceCache,
     pub source_meta: SourceMetaCache,
     pub search_trail: Arc<Mutex<Vec<SearchTrailEntry>>>,
@@ -195,19 +207,17 @@ pub fn run(
         &ctx,
         &mut uncertainties,
     )?;
-    let mut candidates = extract_all(&answers, &ctx);
-    let mut claims = verify::verify_candidates(candidates.clone(), verify_policy, &ctx);
+    let mut candidates = extract_all(&answers, &ctx, &mut uncertainties);
+    let mut verified = verify::verify_candidates(candidates.clone(), verify_policy, &ctx);
 
     if depth == Depth::Deep {
-        let verdicts: Vec<_> = claims
+        // Derive dead subquestions from the subquestion attribution carried by
+        // each VerifiedClaim — NOT a positional zip against `candidates`, which
+        // breaks when `run_chunked` drops a panicked thread and misaligns every
+        // subsequent pair.
+        let verdicts: Vec<_> = verified
             .iter()
-            .zip(candidates.iter())
-            .map(|(claim, candidate)| {
-                (
-                    candidate.subquestion.clone(),
-                    claim.verdict.is_supported_or_partial(),
-                )
-            })
+            .map(|vc| (vc.subquestion.clone(), vc.claim.verdict.is_supported_or_partial()))
             .collect();
         let dead = dead_subquestions(&subquestions, &verdicts);
         if !dead.is_empty() {
@@ -215,16 +225,18 @@ pub fn run(
             let refinement_answers =
                 launch_workers(refinement_tasks(dead), &ctx, &mut uncertainties)?;
             answers.extend(refinement_answers);
-            let refined = extract_all(&answers[refinement_start..], &ctx);
+            let refined = extract_all(&answers[refinement_start..], &ctx, &mut uncertainties);
             let start = candidates.len();
             candidates.extend(refined);
             let refined_verified =
                 verify::verify_candidates(candidates[start..].to_vec(), verify_policy, &ctx);
-            claims.extend(refined_verified);
+            verified.extend(refined_verified);
         }
     }
 
-    let claims = extract::dedup_research_claims(claims);
+    let claims = extract::dedup_research_claims(
+        verified.into_iter().map(|vc| vc.claim).collect(),
+    );
     let search_trail = ctx
         .state
         .search_trail
@@ -273,7 +285,7 @@ fn prepare_subquestions(
     }
     if !ctx.may_launch(DECOMPOSE_WORST_CASE_COST)? {
         uncertainties.push("decomposition not launched: budget gate refused".to_string());
-        return Ok(Vec::new());
+        return Ok(vec![question.to_string()]);
     }
 
     match decompose::decompose(question, depth.decompose_count(), ctx.today, ctx.chat) {
@@ -356,10 +368,48 @@ fn launch_workers(
     Ok(out)
 }
 
-fn extract_all(answers: &[worker::WorkerAnswer], ctx: &StageContext<'_>) -> Vec<ClaimCandidate> {
-    let nested = run_chunked(answers.to_vec(), ctx.max_concurrency, |answer| {
-        extract::extract_candidates(answer, ctx.chat)
-    });
+fn extract_all(
+    answers: &[worker::WorkerAnswer],
+    ctx: &StageContext<'_>,
+    uncertainties: &mut Vec<String>,
+) -> Vec<ClaimCandidate> {
+    let mut nested: Vec<Vec<ClaimCandidate>> = Vec::new();
+    let mut iter = answers.iter().peekable();
+    while iter.peek().is_some() {
+        let mut batch: Vec<&worker::WorkerAnswer> = Vec::new();
+        while batch.len() < ctx.max_concurrency {
+            let Some(answer) = iter.next() else { break };
+            match ctx.may_launch(EXTRACT_WORST_CASE_COST) {
+                Ok(true) => batch.push(answer),
+                Ok(false) => {
+                    uncertainties.push(format!(
+                        "extraction not launched for subquestion {:?}: budget gate refused",
+                        answer.subquestion
+                    ));
+                    for rest in iter.by_ref() {
+                        uncertainties.push(format!(
+                            "extraction not launched for subquestion {:?}: budget gate refused",
+                            rest.subquestion
+                        ));
+                    }
+                    break;
+                }
+                Err(err) => {
+                    uncertainties.push(format!("extraction gate failed: {err}"));
+                    break;
+                }
+            }
+        }
+
+        if batch.is_empty() {
+            break;
+        }
+
+        let results = run_chunked(batch, ctx.max_concurrency, |answer| {
+            extract::extract_candidates(answer.clone(), ctx.chat)
+        });
+        nested.extend(results);
+    }
     extract::dedup_candidates(nested.into_iter().flatten().collect())
 }
 
@@ -546,5 +596,111 @@ mod tests {
         assert_eq!(data.outcome, Outcome::Partial);
         assert_eq!(budget.hit(), Some("dollars"));
         assert!(data.claims.is_empty());
+    }
+
+    #[test]
+    fn decompose_budget_refusal_falls_back_to_original_question() {
+        // Finding 2: a budget that refuses decompose must still produce worker
+        // tasks on the original question, not zero workers.
+        let chat = ScriptedChat::new(Vec::new());
+        let search = FakeSearch::default();
+        let budget = Budget::new(Some(0.0), None);
+        let params = RunParams::new("2026-07-01", 2, new_spend());
+        let ctx = StageContext::new(&chat, &search, &budget, &params);
+        let mut uncertainties = Vec::new();
+
+        let subquestions =
+            prepare_subquestions("question", Depth::Standard, &ctx, &mut uncertainties).unwrap();
+
+        // Falls back to the original question, not an empty vec.
+        assert_eq!(subquestions, vec!["question".to_string()]);
+        assert!(uncertainties
+            .iter()
+            .any(|u| u.contains("decomposition not launched")));
+
+        // Worker tasks are created from the fallback question.
+        let tasks = initial_worker_tasks(Depth::Standard, "question", subquestions);
+        assert!(!tasks.is_empty());
+        assert_eq!(tasks[0].subquestion, "question");
+    }
+
+    #[test]
+    fn extract_budget_refusal_yields_zero_claims_and_uncertainty() {
+        // Finding 4: budget refused at extract → zero claims, uncertainty
+        // recorded. We set up a worker answer but refuse the extraction gate.
+        let chat = ScriptedChat::new(Vec::new());
+        let search = FakeSearch::default();
+        let budget = Budget::new(Some(0.0), None);
+        let params = RunParams::new("2026-07-01", 2, new_spend());
+        let ctx = StageContext::new(&chat, &search, &budget, &params);
+        let mut uncertainties = Vec::new();
+
+        let answers = vec![worker::WorkerAnswer {
+            subquestion: "subq".to_string(),
+            answer: "some answer".to_string(),
+            budget_stopped: false,
+        }];
+
+        let candidates = extract_all(&answers, &ctx, &mut uncertainties);
+
+        assert!(candidates.is_empty());
+        assert!(uncertainties
+            .iter()
+            .any(|u| u.contains("extraction not launched")));
+    }
+
+    #[test]
+    fn dead_subquestion_selection_uses_verified_claim_attribution() {
+        // Finding 1: dead-subquestion selection uses the subquestion attribution
+        // carried by VerifiedClaim, not a positional zip. Simulate a scenario
+        // where the first claim is unsupported (dead) and the second is
+        // supported — the dead set should contain only the first subquestion.
+        use crate::pipeline::verify::VerifyPolicy;
+
+        let chat = ScriptedChat::new(vec![
+            test_support::text_response(r#"{"verdict":"unsupported","note":"no"}"#),
+            test_support::text_response(r#"{"verdict":"supported","note":"yes"}"#),
+        ]);
+        let search = FakeSearch::default();
+        let budget = Budget::new(None, None);
+        // concurrency=1 so candidates are verified sequentially in order.
+        let params = RunParams::new("2026-07-01", 1, new_spend());
+        let ctx = StageContext::new(&chat, &search, &budget, &params);
+        ctx.state
+            .source_cache
+            .lock()
+            .unwrap()
+            .insert("https://a.com".to_string(), "text".to_string());
+        ctx.state
+            .source_cache
+            .lock()
+            .unwrap()
+            .insert("https://b.com".to_string(), "text".to_string());
+
+        let candidates = vec![
+            ClaimCandidate {
+                subquestion: "sub-a".to_string(),
+                claim: "A happened".to_string(),
+                url: "https://a.com".to_string(),
+            },
+            ClaimCandidate {
+                subquestion: "sub-b".to_string(),
+                claim: "B happened".to_string(),
+                url: "https://b.com".to_string(),
+            },
+        ];
+
+        let verified = verify::verify_candidates(candidates, VerifyPolicy::Adaptive, &ctx);
+
+        // Derive dead subquestions from the carried attribution (no zip).
+        let verdicts: Vec<_> = verified
+            .iter()
+            .map(|vc| (vc.subquestion.clone(), vc.claim.verdict.is_supported_or_partial()))
+            .collect();
+        let subquestions = vec!["sub-a".to_string(), "sub-b".to_string()];
+        let dead = dead_subquestions(&subquestions, &verdicts);
+
+        // sub-a is unsupported → dead; sub-b is supported → alive.
+        assert_eq!(dead, vec!["sub-a"]);
     }
 }

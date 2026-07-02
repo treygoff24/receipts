@@ -27,12 +27,15 @@ impl Budget {
     ///
     /// # Concurrency contract
     ///
-    /// Launch decisions **must be serialized by the caller** (a single
-    /// coordinator thread). This check is TOCTOU-racy: it reads `spend` and the
-    /// elapsed time without holding any lock across the subsequent launch, so
-    /// concurrent calls can jointly overshoot the cap. The pipeline design
-    /// launches units from one coordinator thread, which makes this safe. Do
-    /// not call `may_launch` from multiple worker threads.
+    /// Calls **must be serialized by the caller** — recon serializes via
+    /// `StageContext::may_launch`'s `budget_gate` mutex, which holds an
+    /// exclusive lock across the read of `spend` and the elapsed-time check.
+    /// This check is TOCTOU-racy without that serialization: it reads `spend`
+    /// and the elapsed time without holding any lock across the subsequent
+    /// launch, so concurrent calls can jointly overshoot the cap. The pipeline
+    /// serializes every `may_launch` call through `StageContext`, which makes
+    /// this safe. Overshoot is bounded at one in-flight unit per concurrent
+    /// worker — the design's stated bound.
     pub fn may_launch(&self, spend: &Spend, projected_unit_cost: f64) -> bool {
         if self.hit.get().is_some() {
             return false;
