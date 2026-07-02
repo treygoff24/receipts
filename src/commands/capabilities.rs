@@ -2,7 +2,10 @@ use serde_json::json;
 
 use crate::cli::GlobalArgs;
 use crate::commands::CommandSuccess;
-use crate::config::{DEFAULT_API_BASE, DEFAULT_MAX_CONCURRENCY, DEFAULT_MODEL};
+use crate::config::{
+    DEFAULT_API_BASE, DEFAULT_EXA_SEARCH_TYPE, DEFAULT_MAX_CONCURRENCY, DEFAULT_MODEL,
+    EXA_SEARCH_TYPES,
+};
 use crate::envelope::{Budget, CostDollars, Diagnostics, SuccessEnvelope};
 use crate::error::ReconError;
 use crate::tiers::{
@@ -76,6 +79,7 @@ pub fn run(_global: &GlobalArgs) -> Result<CommandSuccess, ReconError> {
             {"name": "RECON_MODEL", "default": DEFAULT_MODEL},
             {"name": "RECON_API_BASE", "default": DEFAULT_API_BASE},
             {"name": "RECON_EXA_BASE", "default": "https://api.exa.ai"},
+            {"name": "RECON_EXA_SEARCH_TYPE", "default": DEFAULT_EXA_SEARCH_TYPE, "allowed": EXA_SEARCH_TYPES},
             {"name": "RECON_MAX_CONCURRENCY", "default": DEFAULT_MAX_CONCURRENCY}
         ],
         "tiers": [

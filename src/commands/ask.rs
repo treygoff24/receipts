@@ -45,7 +45,9 @@ pub fn run(global: &GlobalArgs, args: &AskArgs) -> Result<CommandSuccess, ReconE
     let model = global.model.clone().unwrap_or(cfg.model);
     let chat =
         CerebrasClient::new(cerebras_key, cfg.api_base, model).with_spend(Arc::clone(&spend));
-    let search = ExaClient::new(exa_key, exa_base_url()).with_spend(Arc::clone(&spend));
+    let search = ExaClient::new(exa_key, exa_base_url())
+        .with_search_type(cfg.exa_search_type.clone())
+        .with_spend(Arc::clone(&spend));
     let budget = RunBudget::new(global.max_dollars, global.max_seconds);
     let params = RunParams::new(
         today_string(),

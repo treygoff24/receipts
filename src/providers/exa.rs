@@ -27,6 +27,7 @@ pub struct SourceDoc {
 pub struct ExaClient {
     api_key: String,
     base_url: String,
+    search_type: String,
     agent: ureq::Agent,
     spend: SharedSpend,
     sleep_fn: SleepFn,
@@ -41,10 +42,16 @@ impl ExaClient {
             } else {
                 base_url
             },
+            search_type: crate::config::DEFAULT_EXA_SEARCH_TYPE.to_string(),
             agent: http_agent(),
             spend: new_spend(),
             sleep_fn: default_sleep(),
         }
+    }
+
+    pub fn with_search_type(mut self, search_type: String) -> Self {
+        self.search_type = search_type;
+        self
     }
 
     pub fn with_spend(mut self, spend: SharedSpend) -> Self {
@@ -118,6 +125,7 @@ impl SearchProvider for ExaClient {
     fn search(&self, query: &str) -> Result<Vec<SourceDoc>, ReconError> {
         let body = json!({
             "query": query,
+            "type": self.search_type,
             "numResults": 4,
             "contents": {"text": true},
         });

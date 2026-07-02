@@ -17,6 +17,7 @@ cargo install --path .
 | `RECON_MODEL` | model default | `gemma-4-31b` |
 | `RECON_API_BASE` | Cerebras compatible API base | `https://api.cerebras.ai/v1` |
 | `RECON_EXA_BASE` | Exa compatible API base | `https://api.exa.ai` |
+| `RECON_EXA_SEARCH_TYPE` | Exa search type: `fast`, `instant`, or `auto` | `fast` |
 | `RECON_MAX_CONCURRENCY` | worker concurrency | `25` |
 
 ## Ask

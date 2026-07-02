@@ -79,6 +79,7 @@ pub fn run(global: &GlobalArgs, args: &DoctorArgs) -> Result<CommandSuccess, Rec
             require_key(cfg.exa_api_key.as_deref(), Provider::Exa, "EXA_API_KEY")?,
             exa_base_url(),
         )
+        .with_search_type(cfg.exa_search_type.clone())
         .with_spend(Arc::clone(&spend));
         checks.push(probe_exa(&search));
     }
@@ -137,10 +138,11 @@ fn offline_checks(cfg: &Config, global: &GlobalArgs) -> Vec<DoctorCheck> {
             "config.resolved",
             "config",
             &format!(
-                "model={}, apiBase={}, exaBase={}, maxConcurrency={}, depth={}, verify={}",
+                "model={}, apiBase={}, exaBase={}, exaSearchType={}, maxConcurrency={}, depth={}, verify={}",
                 global.model.as_deref().unwrap_or(&cfg.model),
                 cfg.api_base,
                 exa_base_url(),
+                cfg.exa_search_type,
                 cfg.max_concurrency,
                 depth_name(global.depth),
                 verify_name(global.verify)

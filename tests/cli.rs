@@ -28,6 +28,7 @@ fn recon_cmd(home: &PathBuf) -> Command {
         .env_remove("RECON_API_BASE")
         .env_remove("RECON_EXA_BASE")
         .env_remove("EXA_API_BASE")
+        .env_remove("RECON_EXA_SEARCH_TYPE")
         .env_remove("RECON_MAX_CONCURRENCY");
     cmd
 }

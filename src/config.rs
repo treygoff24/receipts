@@ -13,6 +13,12 @@ use crate::error::ReconError;
 pub const DEFAULT_MODEL: &str = "gemma-4-31b";
 pub const DEFAULT_API_BASE: &str = "https://api.cerebras.ai/v1";
 pub const DEFAULT_MAX_CONCURRENCY: u32 = 25;
+/// Exa search type: A/B measured 2026-07-02 end-to-end (3 questions, depth
+/// standard). fast: 5.3s mean, 19.3 supported+partial claims. instant: 9.3s,
+/// 18.7 — its thinner results push workers into extra search rounds, negating
+/// the raw ~370ms-vs-575ms per-search edge. auto: 10.3s, 13.3.
+pub const DEFAULT_EXA_SEARCH_TYPE: &str = "fast";
+pub const EXA_SEARCH_TYPES: &[&str] = &["fast", "instant", "auto"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
@@ -21,6 +27,7 @@ pub struct Config {
     pub model: String,
     pub api_base: String,
     pub max_concurrency: u32,
+    pub exa_search_type: String,
 }
 
 impl Default for Config {
@@ -31,6 +38,7 @@ impl Default for Config {
             model: DEFAULT_MODEL.to_string(),
             api_base: DEFAULT_API_BASE.to_string(),
             max_concurrency: DEFAULT_MAX_CONCURRENCY,
+            exa_search_type: DEFAULT_EXA_SEARCH_TYPE.to_string(),
         }
     }
 }
@@ -42,6 +50,7 @@ struct FileConfig {
     model: Option<String>,
     api_base: Option<String>,
     max_concurrency: Option<u32>,
+    exa_search_type: Option<String>,
 }
 
 fn default_config_path() -> Option<PathBuf> {
@@ -81,6 +90,17 @@ impl Config {
 
         let defaults = Config::default();
 
+        let exa_search_type = env::var("RECON_EXA_SEARCH_TYPE")
+            .ok()
+            .or(file_cfg.exa_search_type)
+            .unwrap_or(defaults.exa_search_type);
+        if !EXA_SEARCH_TYPES.contains(&exa_search_type.as_str()) {
+            return Err(ReconError::config(format!(
+                "invalid exa search type {exa_search_type:?}; expected one of: {}",
+                EXA_SEARCH_TYPES.join(", ")
+            )));
+        }
+
         Ok(Config {
             cerebras_api_key: env::var("CEREBRAS_API_KEY")
                 .ok()
@@ -99,6 +119,7 @@ impl Config {
                 .and_then(|s| s.parse::<u32>().ok())
                 .or(file_cfg.max_concurrency)
                 .unwrap_or(defaults.max_concurrency),
+            exa_search_type,
         })
     }
 }
@@ -121,6 +142,7 @@ mod tests {
         "RECON_MODEL",
         "RECON_API_BASE",
         "RECON_MAX_CONCURRENCY",
+        "RECON_EXA_SEARCH_TYPE",
     ];
 
     fn clear_env() {
@@ -227,6 +249,34 @@ mod tests {
         let cfg = result.unwrap();
         assert_eq!(cfg.cerebras_api_key, None);
         assert_eq!(cfg.exa_api_key, None);
+    }
+
+    #[test]
+    fn exa_search_type_defaults_to_fast_and_env_overrides() {
+        let _guard = env_lock().lock().unwrap();
+        clear_env();
+
+        let cfg = Config::load_from(None).unwrap();
+        assert_eq!(cfg.exa_search_type, "fast");
+
+        set_env("RECON_EXA_SEARCH_TYPE", "instant");
+        let cfg = Config::load_from(None).unwrap();
+        assert_eq!(cfg.exa_search_type, "instant");
+
+        clear_env();
+    }
+
+    #[test]
+    fn invalid_exa_search_type_is_a_config_error() {
+        let _guard = env_lock().lock().unwrap();
+        clear_env();
+
+        set_env("RECON_EXA_SEARCH_TYPE", "warp-speed");
+        let err = Config::load_from(None).unwrap_err();
+        assert_eq!(err.exit_code(), 3);
+        assert!(err.to_string().contains("warp-speed"));
+
+        clear_env();
     }
 
     #[test]
