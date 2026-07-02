@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::error::{Provider, ReconError};
 use crate::providers::{
-    default_sleep, http_agent, join_url, new_spend, run_with_retries, HttpFailure, SharedSpend,
-    SleepFn, USER_AGENT,
+    HttpFailure, SharedSpend, SleepFn, USER_AGENT, default_sleep, http_agent, join_url, new_spend,
+    run_with_retries,
 };
 
 pub const DEFAULT_BASE_URL: &str = "https://api.exa.ai";

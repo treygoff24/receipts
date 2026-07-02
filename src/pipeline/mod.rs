@@ -15,7 +15,7 @@ use crate::providers::cerebras::{CerebrasClient, ChatOpts, ChatResponse, Message
 use crate::providers::exa::SearchProvider;
 use crate::providers::{SharedSpend, new_spend};
 use crate::tiers::{
-    DECOMPOSE_WORST_CASE_COST, EXTRACT_WORST_CASE_COST, Depth, WORKER_ROUND_WORST_CASE_COST,
+    DECOMPOSE_WORST_CASE_COST, Depth, EXTRACT_WORST_CASE_COST, WORKER_ROUND_WORST_CASE_COST,
     dead_subquestions, initial_worker_tasks, refinement_tasks,
 };
 
@@ -217,7 +217,12 @@ pub fn run(
         // subsequent pair.
         let verdicts: Vec<_> = verified
             .iter()
-            .map(|vc| (vc.subquestion.clone(), vc.claim.verdict.is_supported_or_partial()))
+            .map(|vc| {
+                (
+                    vc.subquestion.clone(),
+                    vc.claim.verdict.is_supported_or_partial(),
+                )
+            })
             .collect();
         let dead = dead_subquestions(&subquestions, &verdicts);
         if !dead.is_empty() {
@@ -234,9 +239,7 @@ pub fn run(
         }
     }
 
-    let claims = extract::dedup_research_claims(
-        verified.into_iter().map(|vc| vc.claim).collect(),
-    );
+    let claims = extract::dedup_research_claims(verified.into_iter().map(|vc| vc.claim).collect());
     let search_trail = ctx
         .state
         .search_trail
@@ -614,9 +617,11 @@ mod tests {
 
         // Falls back to the original question, not an empty vec.
         assert_eq!(subquestions, vec!["question".to_string()]);
-        assert!(uncertainties
-            .iter()
-            .any(|u| u.contains("decomposition not launched")));
+        assert!(
+            uncertainties
+                .iter()
+                .any(|u| u.contains("decomposition not launched"))
+        );
 
         // Worker tasks are created from the fallback question.
         let tasks = initial_worker_tasks(Depth::Standard, "question", subquestions);
@@ -644,9 +649,11 @@ mod tests {
         let candidates = extract_all(&answers, &ctx, &mut uncertainties);
 
         assert!(candidates.is_empty());
-        assert!(uncertainties
-            .iter()
-            .any(|u| u.contains("extraction not launched")));
+        assert!(
+            uncertainties
+                .iter()
+                .any(|u| u.contains("extraction not launched"))
+        );
     }
 
     #[test]
@@ -695,7 +702,12 @@ mod tests {
         // Derive dead subquestions from the carried attribution (no zip).
         let verdicts: Vec<_> = verified
             .iter()
-            .map(|vc| (vc.subquestion.clone(), vc.claim.verdict.is_supported_or_partial()))
+            .map(|vc| {
+                (
+                    vc.subquestion.clone(),
+                    vc.claim.verdict.is_supported_or_partial(),
+                )
+            })
             .collect();
         let subquestions = vec!["sub-a".to_string(), "sub-b".to_string()];
         let dead = dead_subquestions(&subquestions, &verdicts);

@@ -98,7 +98,11 @@ pub struct ErrorEnvelope {
 }
 
 impl ErrorEnvelope {
-    pub fn from_error(command: impl Into<String>, err: &ReconError, request_id: Option<String>) -> Self {
+    pub fn from_error(
+        command: impl Into<String>,
+        err: &ReconError,
+        request_id: Option<String>,
+    ) -> Self {
         Self {
             schema: "recon.cli.error.v1".to_string(),
             ok: false,
@@ -125,7 +129,11 @@ pub fn emit_success(env: &SuccessEnvelope, force_json: bool) {
         render_success_human(env);
     } else {
         let mut lock = stdout.lock();
-        let _ = writeln!(lock, "{}", serde_json::to_string(env).expect("envelope serializes"));
+        let _ = writeln!(
+            lock,
+            "{}",
+            serde_json::to_string(env).expect("envelope serializes")
+        );
     }
 }
 
@@ -137,7 +145,11 @@ pub fn emit_error(env: &ErrorEnvelope, force_json: bool) -> i32 {
         render_error_human(env);
     } else {
         let mut lock = stderr.lock();
-        let _ = writeln!(lock, "{}", serde_json::to_string(env).expect("envelope serializes"));
+        let _ = writeln!(
+            lock,
+            "{}",
+            serde_json::to_string(env).expect("envelope serializes")
+        );
     }
     env.exit_code
 }
@@ -149,7 +161,11 @@ fn render_success_human(env: &SuccessEnvelope) {
         env.cost_dollars.total,
         env.cost_dollars.model,
         env.cost_dollars.search,
-        if env.cost_dollars.estimated { " [estimated]" } else { "" }
+        if env.cost_dollars.estimated {
+            " [estimated]"
+        } else {
+            ""
+        }
     );
     if let Some(hit) = &env.budget.hit {
         println!("budget hit: {hit}");
@@ -247,7 +263,10 @@ mod tests {
         assert_eq!(json["error"]["category"], "rate_limited");
         assert_eq!(json["error"]["retryable"], true);
         assert_eq!(json["error"]["provider"], "cerebras");
-        assert_eq!(json["error"]["message"], "rate limited: Cerebras returned 429");
+        assert_eq!(
+            json["error"]["message"],
+            "rate limited: Cerebras returned 429"
+        );
         assert_eq!(json["error"]["partial"], serde_json::json!({"claims": []}));
 
         assert!(json.get("request_id").is_none());

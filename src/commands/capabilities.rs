@@ -1,0 +1,120 @@
+use serde_json::json;
+
+use crate::cli::GlobalArgs;
+use crate::commands::CommandSuccess;
+use crate::config::{DEFAULT_API_BASE, DEFAULT_MAX_CONCURRENCY, DEFAULT_MODEL};
+use crate::envelope::{Budget, CostDollars, Diagnostics, SuccessEnvelope};
+use crate::error::ReconError;
+use crate::tiers::{
+    CONTENTS_WORST_CASE_COST, DECOMPOSE_WORST_CASE_COST, EXTRACT_WORST_CASE_COST,
+    VERIFICATION_WORST_CASE_COST, WORKER_ROUND_WORST_CASE_COST,
+};
+
+pub fn run(_global: &GlobalArgs) -> Result<CommandSuccess, ReconError> {
+    let data = json!({
+        "name": "recon",
+        "version": env!("CARGO_PKG_VERSION"),
+        "schema": "recon.cli.capabilities.v1",
+        "commands": [
+            {
+                "name": "ask",
+                "usage": "recon ask <QUESTION>",
+                "defaultSubcommand": true,
+                "readOnly": true,
+                "destructive": false,
+                "spendsMoney": true,
+                "stdout": "recon.cli.response.v1",
+                "stderrOnError": "recon.cli.error.v1"
+            },
+            {
+                "name": "doctor",
+                "usage": "recon doctor [--online]",
+                "readOnly": true,
+                "destructive": false,
+                "spendsMoney": true,
+                "spendsMoneyNote": "only with --online provider probes"
+            },
+            {
+                "name": "capabilities",
+                "usage": "recon capabilities",
+                "readOnly": true,
+                "destructive": false,
+                "spendsMoney": false
+            },
+            {
+                "name": "schema",
+                "usage": "recon schema [response|error|all]",
+                "readOnly": true,
+                "destructive": false,
+                "spendsMoney": false
+            }
+        ],
+        "globalFlags": [
+            {"name": "--json", "type": "bool", "default": false, "description": "force JSON envelope"},
+            {"name": "--model", "type": "string", "default": DEFAULT_MODEL},
+            {"name": "--depth", "type": "enum", "values": ["quick", "standard", "deep"], "default": "standard"},
+            {"name": "--max-seconds", "type": "integer", "minimum": 1, "default": null},
+            {"name": "--max-dollars", "type": "number", "minimum": 0, "default": null},
+            {"name": "--verify", "type": "enum", "values": ["adaptive", "paranoid", "off"], "default": "adaptive"},
+            {"name": "--brief", "type": "bool", "default": false},
+            {"name": "--dry-run", "type": "bool", "default": false}
+        ],
+        "exitCodes": {
+            "0": "ok",
+            "1": "usage",
+            "2": "auth",
+            "3": "config",
+            "4": "network",
+            "5": "upstream",
+            "6": "rate-limit",
+            "10": "partial; stdout carries ok:true success envelope with data.outcome=partial and budget.hit set",
+            "11": "no-input"
+        },
+        "envVars": [
+            {"name": "CEREBRAS_API_KEY", "requiredFor": ["ask", "doctor --online"], "secret": true},
+            {"name": "EXA_API_KEY", "requiredFor": ["ask", "doctor --online"], "secret": true},
+            {"name": "RECON_MODEL", "default": DEFAULT_MODEL},
+            {"name": "RECON_API_BASE", "default": DEFAULT_API_BASE},
+            {"name": "RECON_EXA_BASE", "default": "https://api.exa.ai"},
+            {"name": "RECON_MAX_CONCURRENCY", "default": DEFAULT_MAX_CONCURRENCY}
+        ],
+        "tiers": [
+            {"name": "quick", "workers": 2, "latencyExpectation": "~10s target", "costExpectation": "~$0.05-$0.10 typical", "notes": "two same-question workers with complementary search angles"},
+            {"name": "standard", "workers": 4, "latencyExpectation": "~9-15s measured", "costExpectation": "~$0.15 measured", "notes": "default; four decomposed subquestions"},
+            {"name": "deep", "workers": 8, "latencyExpectation": "~9s measured", "costExpectation": "~$0.31 measured", "notes": "adaptive verification and refinement pass"}
+        ],
+        "budgetUnitCosts": {
+            "decompose": DECOMPOSE_WORST_CASE_COST,
+            "workerRound": WORKER_ROUND_WORST_CASE_COST,
+            "extract": EXTRACT_WORST_CASE_COST,
+            "verify": VERIFICATION_WORST_CASE_COST,
+            "contents": CONTENTS_WORST_CASE_COST
+        },
+        "schemas": {
+            "response": "recon schema response",
+            "error": "recon schema error",
+            "all": "recon schema all"
+        }
+    });
+
+    Ok(CommandSuccess {
+        envelope: SuccessEnvelope::new(
+            "capabilities",
+            data,
+            CostDollars {
+                model: 0.0,
+                search: 0.0,
+                total: 0.0,
+                estimated: false,
+            },
+            Budget { hit: None },
+            Diagnostics {
+                duration_ms: 0,
+                retries: 0,
+            },
+            None,
+        ),
+        exit_code: 0,
+        hint: None,
+    })
+}

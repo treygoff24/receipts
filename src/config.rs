@@ -50,10 +50,18 @@ fn default_config_path() -> Option<PathBuf> {
 }
 
 fn read_file_config(path: &Path) -> Result<FileConfig, ReconError> {
-    let text = fs::read_to_string(path)
-        .map_err(|e| ReconError::config(format!("failed to read config file {}: {e}", path.display())))?;
-    toml::from_str(&text)
-        .map_err(|e| ReconError::config(format!("failed to parse config file {}: {e}", path.display())))
+    let text = fs::read_to_string(path).map_err(|e| {
+        ReconError::config(format!(
+            "failed to read config file {}: {e}",
+            path.display()
+        ))
+    })?;
+    toml::from_str(&text).map_err(|e| {
+        ReconError::config(format!(
+            "failed to parse config file {}: {e}",
+            path.display()
+        ))
+    })
 }
 
 impl Config {
@@ -74,9 +82,14 @@ impl Config {
         let defaults = Config::default();
 
         Ok(Config {
-            cerebras_api_key: env::var("CEREBRAS_API_KEY").ok().or(file_cfg.cerebras_api_key),
+            cerebras_api_key: env::var("CEREBRAS_API_KEY")
+                .ok()
+                .or(file_cfg.cerebras_api_key),
             exa_api_key: env::var("EXA_API_KEY").ok().or(file_cfg.exa_api_key),
-            model: env::var("RECON_MODEL").ok().or(file_cfg.model).unwrap_or(defaults.model),
+            model: env::var("RECON_MODEL")
+                .ok()
+                .or(file_cfg.model)
+                .unwrap_or(defaults.model),
             api_base: env::var("RECON_API_BASE")
                 .ok()
                 .or(file_cfg.api_base)

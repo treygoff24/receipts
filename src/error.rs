@@ -38,28 +38,52 @@ pub struct ErrorContext {
 #[derive(Debug, thiserror::Error)]
 pub enum ReconError {
     #[error("usage error: {message}")]
-    Usage { message: String, context: ErrorContext },
+    Usage {
+        message: String,
+        context: ErrorContext,
+    },
 
     #[error("authentication failed: {message}")]
-    Auth { message: String, context: ErrorContext },
+    Auth {
+        message: String,
+        context: ErrorContext,
+    },
 
     #[error("configuration error: {message}")]
-    Config { message: String, context: ErrorContext },
+    Config {
+        message: String,
+        context: ErrorContext,
+    },
 
     #[error("network error: {message}")]
-    Network { message: String, context: ErrorContext },
+    Network {
+        message: String,
+        context: ErrorContext,
+    },
 
     #[error("upstream error: {message}")]
-    Upstream { message: String, context: ErrorContext },
+    Upstream {
+        message: String,
+        context: ErrorContext,
+    },
 
     #[error("rate limited: {message}")]
-    RateLimit { message: String, context: ErrorContext },
+    RateLimit {
+        message: String,
+        context: ErrorContext,
+    },
 
     #[error("partial result: {message}")]
-    Partial { message: String, context: ErrorContext },
+    Partial {
+        message: String,
+        context: ErrorContext,
+    },
 
     #[error("no input: {message}")]
-    NoInput { message: String, context: ErrorContext },
+    NoInput {
+        message: String,
+        context: ErrorContext,
+    },
 }
 
 macro_rules! constructor {

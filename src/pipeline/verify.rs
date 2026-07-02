@@ -196,7 +196,10 @@ fn judge(
     if needs_more && policy == VerifyPolicy::Adaptive {
         // Gate the +2 escalation judges. If the budget refuses, keep the
         // single judge's verdict as-is (partial stands, no escalation).
-        if ctx.may_launch(2.0 * VERIFICATION_WORST_CASE_COST).unwrap_or(false) {
+        if ctx
+            .may_launch(2.0 * VERIFICATION_WORST_CASE_COST)
+            .unwrap_or(false)
+        {
             votes.push(judge_once(candidate, source_text, ctx)?);
             votes.push(judge_once(candidate, source_text, ctx)?);
         }

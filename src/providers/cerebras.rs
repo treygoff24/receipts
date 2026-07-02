@@ -2,12 +2,12 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::error::{Provider, ReconError};
 use crate::providers::{
-    default_sleep, http_agent, join_url, new_spend, run_with_retries, HttpFailure, SharedSpend,
-    SleepFn, USER_AGENT,
+    HttpFailure, SharedSpend, SleepFn, USER_AGENT, default_sleep, http_agent, join_url, new_spend,
+    run_with_retries,
 };
 
 /// A chat-completions message.
