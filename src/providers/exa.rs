@@ -5,8 +5,8 @@ use serde_json::{json, Value};
 
 use crate::error::{Provider, ReconError};
 use crate::providers::{
-    default_sleep, join_url, new_spend, run_with_retries, HttpFailure, SharedSpend, SleepFn,
-    USER_AGENT,
+    default_sleep, http_agent, join_url, new_spend, run_with_retries, HttpFailure, SharedSpend,
+    SleepFn, USER_AGENT,
 };
 
 pub const DEFAULT_BASE_URL: &str = "https://api.exa.ai";
@@ -41,7 +41,7 @@ impl ExaClient {
             } else {
                 base_url
             },
-            agent: ureq::Agent::new_with_defaults(),
+            agent: http_agent(),
             spend: new_spend(),
             sleep_fn: default_sleep(),
         }
@@ -80,13 +80,14 @@ impl ExaClient {
             .map_err(|err| HttpFailure::Transport(err.to_string()))
     }
 
-    fn record_search_spend(&self, dollars: f64) -> Result<(), ReconError> {
+    fn record_search_spend(&self, dollars: f64, retries: u32) -> Result<(), ReconError> {
         let mut spend = self.spend.lock().map_err(|_| {
             ReconError::upstream("spend meter lock poisoned").with_provider(Provider::Exa)
         })?;
 
         spend.search_dollars += dollars;
         spend.call_count += 1;
+        spend.retries += retries as u64;
         Ok(())
     }
 }
@@ -98,7 +99,7 @@ impl SearchProvider for ExaClient {
             "numResults": 4,
             "contents": {"text": true},
         });
-        let (raw, _) = run_with_retries(
+        let (raw, retries) = run_with_retries(
             Provider::Exa,
             || self.post_json("/search", &body),
             self.sleep_fn.as_ref(),
@@ -109,7 +110,7 @@ impl SearchProvider for ExaClient {
                 .with_retryable(false)
         })?;
 
-        self.record_search_spend(response.cost_dollars.total())?;
+        self.record_search_spend(response.cost_dollars.total(), retries)?;
         Ok(response.results.into_iter().map(SourceDoc::from).collect())
     }
 
@@ -118,7 +119,7 @@ impl SearchProvider for ExaClient {
             "urls": [url],
             "text": true,
         });
-        let (raw, _) = run_with_retries(
+        let (raw, retries) = run_with_retries(
             Provider::Exa,
             || self.post_json("/contents", &body),
             self.sleep_fn.as_ref(),
@@ -129,7 +130,7 @@ impl SearchProvider for ExaClient {
                 .with_retryable(false)
         })?;
 
-        self.record_search_spend(response.cost_dollars.total())?;
+        self.record_search_spend(response.cost_dollars.total(), retries)?;
         Ok(response.results.into_iter().find_map(|result| result.text))
     }
 }
@@ -211,7 +212,7 @@ mod tests {
         let client =
             ExaClient::new("key".into(), "http://localhost".into()).with_spend(Arc::clone(&spend));
 
-        client.record_search_spend(0.03).unwrap();
+        client.record_search_spend(0.03, 0).unwrap();
 
         let spend = spend.lock().unwrap();
         assert_eq!(spend.dollars, 0.0);

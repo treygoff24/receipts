@@ -6,14 +6,68 @@ use serde_json::{json, Value};
 
 use crate::error::{Provider, ReconError};
 use crate::providers::{
-    default_sleep, join_url, new_spend, run_with_retries, HttpFailure, SharedSpend, SleepFn,
-    USER_AGENT,
+    default_sleep, http_agent, join_url, new_spend, run_with_retries, HttpFailure, SharedSpend,
+    SleepFn, USER_AGENT,
 };
 
+/// A chat-completions message.
+///
+/// Serializes to the three shapes Cerebras (OpenAI-compat) accepts:
+/// - user/system/assistant-text: `{"role","content"}`
+/// - assistant tool_calls (NO `content` key, which Cerebras rejects alongside tool_calls)
+/// - tool results: `{"role":"tool","tool_call_id","content"}`
+///
+/// Fields that don't apply to a given role are omitted from serialization so the
+/// wire payload stays well-formed.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Message {
     pub role: String,
-    pub content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+}
+
+impl Message {
+    pub fn system(text: impl Into<String>) -> Self {
+        Self {
+            role: "system".into(),
+            content: Some(text.into()),
+            tool_calls: None,
+            tool_call_id: None,
+        }
+    }
+
+    pub fn user(text: impl Into<String>) -> Self {
+        Self {
+            role: "user".into(),
+            content: Some(text.into()),
+            tool_calls: None,
+            tool_call_id: None,
+        }
+    }
+
+    /// Assistant message carrying tool calls and no `content` (Cerebras rejects
+    /// `content` alongside `tool_calls`).
+    pub fn assistant_tool_calls(tool_calls: Value) -> Self {
+        Self {
+            role: "assistant".into(),
+            content: None,
+            tool_calls: Some(tool_calls),
+            tool_call_id: None,
+        }
+    }
+
+    pub fn tool(tool_call_id: impl Into<String>, content: impl Into<String>) -> Self {
+        Self {
+            role: "tool".into(),
+            content: Some(content.into()),
+            tool_calls: None,
+            tool_call_id: Some(tool_call_id.into()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -60,7 +114,7 @@ impl CerebrasClient {
             api_key,
             base_url,
             model,
-            agent: ureq::Agent::new_with_defaults(),
+            agent: http_agent(),
             spend: new_spend(),
             sleep_fn: default_sleep(),
         }
@@ -87,14 +141,14 @@ impl CerebrasClient {
         let url = join_url(&self.base_url, "/chat/completions");
         let body = self.request_body(messages, opts);
         let start = Instant::now();
-        let (raw, _) = run_with_retries(
+        let (raw, retries) = run_with_retries(
             Provider::Cerebras,
             || self.post_json(&url, &body),
             self.sleep_fn.as_ref(),
         )?;
         let mut response = parse_chat_response(&raw)?;
         response.wall_time_ms = start.elapsed().as_millis() as u64;
-        self.record_spend(&response.usage)?;
+        self.record_spend(&response.usage, retries)?;
         Ok(response)
     }
 
@@ -136,7 +190,7 @@ impl CerebrasClient {
             .map_err(|err| HttpFailure::Transport(err.to_string()))
     }
 
-    fn record_spend(&self, usage: &TokenUsage) -> Result<(), ReconError> {
+    fn record_spend(&self, usage: &TokenUsage, retries: u32) -> Result<(), ReconError> {
         let dollars = model_cost_dollars(&self.model, usage);
         let mut spend = self.spend.lock().map_err(|_| {
             ReconError::upstream("spend meter lock poisoned").with_provider(Provider::Cerebras)
@@ -146,15 +200,34 @@ impl CerebrasClient {
         spend.completion_tokens += usage.completion_tokens;
         spend.dollars += dollars;
         spend.call_count += 1;
+        spend.retries += retries as u64;
         Ok(())
     }
 }
 
-fn model_cost_dollars(_model: &str, usage: &TokenUsage) -> f64 {
-    (usage.prompt_tokens as f64 / 1_000_000.0 * 2.15)
-        + (usage.completion_tokens as f64 / 1_000_000.0 * 2.70)
+/// Per-model price table: `(input $/1M tokens, output $/1M tokens)`.
+///
+/// Unknown models fall back to the gemma pricing so the meter errs on the high
+/// side rather than silently zeroing cost (which would corrupt `--max-dollars`).
+fn model_price_dollars_per_mtok(model: &str) -> (f64, f64) {
+    match model {
+        "gpt-oss-120b" => (0.35, 0.75),
+        "gemma-4-31b" | "zai-glm-4.7" => (2.15, 2.70),
+        _ => (2.15, 2.70),
+    }
 }
 
+fn model_cost_dollars(model: &str, usage: &TokenUsage) -> f64 {
+    let (in_per_mtok, out_per_mtok) = model_price_dollars_per_mtok(model);
+    (usage.prompt_tokens as f64 / 1_000_000.0 * in_per_mtok)
+        + (usage.completion_tokens as f64 / 1_000_000.0 * out_per_mtok)
+}
+
+/// Apply to model-emitted JSON text (structured output content), never to the
+/// HTTP envelope. Strips bad control chars and escapes bare `\u` sequences so
+/// model-mangled JSON becomes parseable. The envelope is valid JSON from the
+/// server; running this on it would corrupt legitimate escaped content
+/// (e.g. `"C:\\users\\x"` arriving server-escaped).
 pub fn json_repair(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut chars = s.chars().peekable();
@@ -192,8 +265,7 @@ fn is_stripped_control(ch: char) -> bool {
 }
 
 fn parse_chat_response(raw: &str) -> Result<ChatResponse, ReconError> {
-    let repaired = json_repair(raw);
-    let response: RawChatResponse = serde_json::from_str(&repaired).map_err(|err| {
+    let response: RawChatResponse = serde_json::from_str(raw).map_err(|err| {
         ReconError::upstream(format!("failed to parse Cerebras response JSON: {err}"))
             .with_provider(Provider::Cerebras)
             .with_retryable(false)
@@ -289,11 +361,13 @@ mod tests {
     }
 
     #[test]
-    fn parses_content_tool_calls_usage_and_repairs_body() {
+    fn parses_content_tool_calls_and_usage_verbatim() {
+        // The HTTP envelope is valid JSON from the server; parse_chat_response no
+        // longer runs json_repair on it, so content comes through verbatim.
         let raw = r#"{
             "choices": [{
                 "message": {
-                    "content": "Próspera\u nope",
+                    "content": "Próspera nope",
                     "tool_calls": [{
                         "id": "call_1",
                         "function": {"name": "search", "arguments": "{\"q\":\"x\"}"}
@@ -305,11 +379,53 @@ mod tests {
 
         let parsed = parse_chat_response(raw).unwrap();
 
-        assert_eq!(parsed.content, "Próspera\\u nope");
+        assert_eq!(parsed.content, "Próspera nope");
         assert_eq!(parsed.tool_calls[0].id, "call_1");
         assert_eq!(parsed.tool_calls[0].function_name, "search");
         assert_eq!(parsed.usage.prompt_tokens, 1000);
         assert_eq!(parsed.usage.completion_tokens, 2000);
+    }
+
+    #[test]
+    fn json_repair_on_model_content_yields_parseable_json() {
+        // json_repair is the wave-3 tool for model-emitted JSON content, not the
+        // envelope. A content string with a raw control char + bad \u must parse.
+        // The literal "\\u" is a backslash-u in the string; json_repair escapes
+        // the bad one and keeps the valid \u00E9.
+        let repaired = json_repair("{\"claim\":\"Café\u{0001} \\u broken \\u00E9\"}");
+        let parsed: Value = serde_json::from_str(&repaired).unwrap();
+
+        assert_eq!(parsed["claim"], "Café \\u broken é");
+    }
+
+    #[test]
+    fn message_serializes_each_role_shape_correctly() {
+        // (a) user message emits only role + content.
+        let user = serde_json::to_value(Message::user("hi")).unwrap();
+        let user_obj = user.as_object().unwrap();
+        assert_eq!(user_obj.len(), 2);
+        assert_eq!(user["role"], "user");
+        assert_eq!(user["content"], "hi");
+        assert!(user.get("tool_calls").is_none());
+        assert!(user.get("tool_call_id").is_none());
+
+        // (b) assistant tool_calls message emits NO "content" key.
+        let assistant = serde_json::to_value(Message::assistant_tool_calls(json!([
+            {"id": "call_1", "type": "function", "function": {"name": "search", "arguments": "{}"}}
+        ])))
+        .unwrap();
+        let assistant_obj = assistant.as_object().unwrap();
+        assert_eq!(assistant_obj.len(), 2);
+        assert_eq!(assistant["role"], "assistant");
+        assert!(assistant.get("content").is_none(), "content must be absent");
+        assert!(assistant["tool_calls"].is_array());
+
+        // (c) tool message emits tool_call_id.
+        let tool = serde_json::to_value(Message::tool("call_1", "result body")).unwrap();
+        assert_eq!(tool["role"], "tool");
+        assert_eq!(tool["tool_call_id"], "call_1");
+        assert_eq!(tool["content"], "result body");
+        assert!(tool.get("tool_calls").is_none());
     }
 
     #[test]
@@ -323,10 +439,13 @@ mod tests {
         .with_spend(Arc::clone(&spend));
 
         client
-            .record_spend(&TokenUsage {
-                prompt_tokens: 1_000_000,
-                completion_tokens: 1_000_000,
-            })
+            .record_spend(
+                &TokenUsage {
+                    prompt_tokens: 1_000_000,
+                    completion_tokens: 1_000_000,
+                },
+                2,
+            )
             .unwrap();
 
         let spend = spend.lock().unwrap();
@@ -334,5 +453,31 @@ mod tests {
         assert_eq!(spend.completion_tokens, 1_000_000);
         assert!((spend.dollars - 4.85).abs() < f64::EPSILON);
         assert_eq!(spend.call_count, 1);
+        assert_eq!(spend.retries, 2);
+    }
+
+    #[test]
+    fn non_gemma_model_uses_correct_pricing() {
+        let spend = Arc::new(Mutex::new(Spend::default()));
+        let client = CerebrasClient::new(
+            "key".into(),
+            "http://localhost".into(),
+            "gpt-oss-120b".into(),
+        )
+        .with_spend(Arc::clone(&spend));
+
+        client
+            .record_spend(
+                &TokenUsage {
+                    prompt_tokens: 1_000_000,
+                    completion_tokens: 1_000_000,
+                },
+                0,
+            )
+            .unwrap();
+
+        let spend = spend.lock().unwrap();
+        // 1M * 0.35 + 1M * 0.75 = 1.10
+        assert!((spend.dollars - 1.10).abs() < f64::EPSILON);
     }
 }

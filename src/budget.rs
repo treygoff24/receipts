@@ -21,6 +21,18 @@ impl Budget {
         }
     }
 
+    /// Pre-launch projection gate. Returns `true` when the projected unit cost
+    /// fits within both the dollar and seconds caps; otherwise records the hit
+    /// reason (which sticks) and returns `false`.
+    ///
+    /// # Concurrency contract
+    ///
+    /// Launch decisions **must be serialized by the caller** (a single
+    /// coordinator thread). This check is TOCTOU-racy: it reads `spend` and the
+    /// elapsed time without holding any lock across the subsequent launch, so
+    /// concurrent calls can jointly overshoot the cap. The pipeline design
+    /// launches units from one coordinator thread, which makes this safe. Do
+    /// not call `may_launch` from multiple worker threads.
     pub fn may_launch(&self, spend: &Spend, projected_unit_cost: f64) -> bool {
         if self.hit.get().is_some() {
             return false;
