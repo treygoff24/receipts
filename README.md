@@ -72,10 +72,10 @@ Success envelope shape:
 | 4 | network | error envelope on stderr, stdout empty |
 | 5 | upstream | error envelope on stderr, stdout empty |
 | 6 | rate limit | error envelope on stderr, stdout empty |
-| 10 | partial | success envelope on stdout with `ok: true`, `data.outcome: "partial"`, and `budget.hit` set |
+| 10 | partial | success envelope on stdout with `ok: true`, `data.outcome: "partial"`, and `budget.hit` set; budget/partial-driven regardless of claim count; a zero-claim partial means the budget closed before work completed |
 | 11 | no input | error envelope on stderr, stdout empty |
 
-Exit 10 is deliberate: budget-hit partials are usable research results, so stdout carries the success envelope even though the process status is nonzero.
+Exit 10 is deliberate: budget-hit partials are usable research results, so stdout carries the success envelope even though the process status is nonzero. Exit 10 is budget/partial-driven regardless of claim count; a zero-claim partial means the budget closed before work completed.
 
 ## Tiers
 

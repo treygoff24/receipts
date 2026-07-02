@@ -64,6 +64,28 @@ impl ExaClient {
         Arc::clone(&self.spend)
     }
 
+    /// Minimal probe for `doctor --online`: POST /search with numResults 1 and
+    /// no `contents.text`, so the call is unbilled/cheapest. Keeps spend
+    /// metering on whatever Exa reports.
+    pub fn probe(&self) -> Result<(), ReconError> {
+        let body = json!({
+            "query": "recon doctor probe",
+            "numResults": 1,
+        });
+        let (raw, retries) = run_with_retries(
+            Provider::Exa,
+            || self.post_json("/search", &body),
+            self.sleep_fn.as_ref(),
+        )?;
+        let response: RawExaResponse = serde_json::from_str(&raw).map_err(|err| {
+            ReconError::upstream(format!("failed to parse Exa probe JSON: {err}"))
+                .with_provider(Provider::Exa)
+                .with_retryable(false)
+        })?;
+        self.record_search_spend(response.cost_dollars.total(), retries)?;
+        Ok(())
+    }
+
     fn post_json(&self, path: &str, body: &Value) -> Result<String, HttpFailure> {
         let url = join_url(&self.base_url, path);
         let mut response = self

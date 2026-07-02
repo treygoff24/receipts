@@ -79,6 +79,7 @@ pub struct ErrorDetail {
     pub provider: Option<String>,
     pub message: String,
     pub partial: Option<serde_json::Value>,
+    pub suggested_fix: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -115,6 +116,7 @@ impl ErrorEnvelope {
                 provider: err.provider().map(|p| p.as_str().to_string()),
                 message: err.to_string(),
                 partial: err.partial_data().cloned(),
+                suggested_fix: err.suggested_fix().map(ToString::to_string),
             },
             exit_code: err.exit_code(),
         }
@@ -250,7 +252,8 @@ mod tests {
         let err = ReconError::rate_limit("Cerebras returned 429")
             .with_provider(Provider::Cerebras)
             .with_retryable(true)
-            .with_partial(serde_json::json!({"claims": []}));
+            .with_partial(serde_json::json!({"claims": []}))
+            .with_suggested_fix("wait and retry; Cerebras rate windows are minute-scale");
 
         let env = ErrorEnvelope::from_error("ask", &err, Some(FIXED_REQUEST_ID.to_string()));
         let json = serde_json::to_value(&env).unwrap();
@@ -268,6 +271,10 @@ mod tests {
             "rate limited: Cerebras returned 429"
         );
         assert_eq!(json["error"]["partial"], serde_json::json!({"claims": []}));
+        assert_eq!(
+            json["error"]["suggestedFix"],
+            "wait and retry; Cerebras rate windows are minute-scale"
+        );
 
         assert!(json.get("request_id").is_none());
         // exit_code is intentionally not part of the JSON contract.
@@ -285,6 +292,7 @@ mod tests {
 
         assert_eq!(json["error"]["provider"], serde_json::Value::Null);
         assert_eq!(json["error"]["partial"], serde_json::Value::Null);
+        assert_eq!(json["error"]["suggestedFix"], serde_json::Value::Null);
         assert_eq!(env.exit_code, 1);
     }
 

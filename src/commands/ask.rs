@@ -65,7 +65,34 @@ pub fn run(global: &GlobalArgs, args: &AskArgs) -> Result<CommandSuccess, ReconE
     let mut data_value = to_value(&data)
         .map_err(|err| ReconError::upstream(format!("failed to serialize research data: {err}")))?;
     if global.brief {
-        data_value["brief"] = json!(brief_from_data(&data));
+        let brief_params = RunParams::new(
+            today_string(),
+            cfg.max_concurrency as usize,
+            Arc::clone(&spend),
+        );
+        match pipeline::synthesize_brief(&data, &chat, &search, &budget, &brief_params) {
+            Ok(Some(text)) => {
+                data_value["brief"] = json!(text);
+            }
+            Ok(None) => {
+                // Budget gate refused the synthesis call — omit the field with
+                // an uncertainty note, matching brief.rs behavior.
+                if let Some(uncertainties) = data_value
+                    .get_mut("uncertainties")
+                    .and_then(|u| u.as_array_mut())
+                {
+                    uncertainties.push(json!("brief omitted: budget gate refused synthesis call"));
+                }
+            }
+            Err(err) => {
+                if let Some(uncertainties) = data_value
+                    .get_mut("uncertainties")
+                    .and_then(|u| u.as_array_mut())
+                {
+                    uncertainties.push(json!(format!("brief failed: {err}")));
+                }
+            }
+        }
     }
     let cost = cost_from_spend(&spend, false)?;
     let retries = retries_from_spend(&spend)?;
@@ -91,20 +118,6 @@ pub fn run(global: &GlobalArgs, args: &AskArgs) -> Result<CommandSuccess, ReconE
     })
 }
 
-fn brief_from_data(data: &pipeline::ResearchData) -> String {
-    let claims: Vec<_> = data
-        .claims
-        .iter()
-        .filter(|claim| claim.verdict.is_supported_or_partial())
-        .take(5)
-        .map(|claim| format!("{} ({})", claim.claim, claim.source_url))
-        .collect();
-    if claims.is_empty() {
-        return "No supported or partial claims found.".to_string();
-    }
-    format!("Supported or partial claims: {}", claims.join("; "))
-}
-
 fn dry_run(global: &GlobalArgs, question: &str) -> Result<CommandSuccess, ReconError> {
     let depth: crate::tiers::Depth = global.depth.into();
     let worker_count = match global.depth {
@@ -118,13 +131,35 @@ fn dry_run(global: &GlobalArgs, question: &str) -> Result<CommandSuccess, ReconE
         VerifyArg::Paranoid => 3.0,
         VerifyArg::Off => 0.0,
     };
-    let projected = decompose_calls as f64 * DECOMPOSE_WORST_CASE_COST
-        + worker_count as f64
-            * crate::pipeline::worker::MAX_ROUNDS as f64
-            * WORKER_ROUND_WORST_CASE_COST
+    let max_rounds = crate::pipeline::worker::MAX_ROUNDS as f64;
+
+    // Model component: decompose + worker rounds + extract + verify.
+    let model_projected = decompose_calls as f64 * DECOMPOSE_WORST_CASE_COST
+        + worker_count as f64 * max_rounds * WORKER_ROUND_WORST_CASE_COST
         + worker_count as f64 * EXTRACT_WORST_CASE_COST
-        + worker_count as f64 * verification_multiplier * VERIFICATION_WORST_CASE_COST
-        + worker_count as f64 * CONTENTS_WORST_CASE_COST;
+        + worker_count as f64 * verification_multiplier * VERIFICATION_WORST_CASE_COST;
+
+    // Refinement pass (Deep only): worst case all subquestions are dead and
+    // get a second worker round — up to `worker_count` additional units.
+    let refinement_note = if global.depth == DepthArg::Deep {
+        "worst case incl. refinement"
+    } else {
+        ""
+    };
+    let refinement_projected = if global.depth == DepthArg::Deep {
+        worker_count as f64 * max_rounds * WORKER_ROUND_WORST_CASE_COST
+    } else {
+        0.0
+    };
+
+    // Search component: per-search-call costs (worker_count * max_rounds
+    // search calls) + per-worker contents fetch costs. Uses the same
+    // unit-cost semantics as live metering.
+    let search_projected =
+        worker_count as f64 * max_rounds * crate::tiers::SEARCH_CALL_WORST_CASE_COST
+            + worker_count as f64 * CONTENTS_WORST_CASE_COST;
+
+    let total_projected = model_projected + refinement_projected + search_projected;
 
     let data = json!({
         "question": question,
@@ -135,17 +170,19 @@ fn dry_run(global: &GlobalArgs, question: &str) -> Result<CommandSuccess, ReconE
             "workers": worker_count,
             "decomposeCalls": decompose_calls,
             "maxWorkerRounds": crate::pipeline::worker::MAX_ROUNDS,
-            "verify": verify_name(global.verify)
+            "verify": verify_name(global.verify),
+            "refinementPass": global.depth == DepthArg::Deep,
+            "note": refinement_note
         },
-        "projectedWorstCaseCost": projected
+        "projectedWorstCaseCost": total_projected
     });
     let envelope = SuccessEnvelope::new(
         "ask",
         data,
         CostDollars {
-            model: projected,
-            search: 0.0,
-            total: projected,
+            model: model_projected + refinement_projected,
+            search: search_projected,
+            total: total_projected,
             estimated: true,
         },
         Budget { hit: None },
@@ -192,8 +229,13 @@ pub(crate) fn require_key(
     key.filter(|value| !value.trim().is_empty())
         .map(ToString::to_string)
         .ok_or_else(|| {
+            let suggested_fix = format!(
+                "set {env_var} or add {} to ~/.config/recon/config.toml; verify with: recon doctor",
+                env_var.to_lowercase()
+            );
             ReconError::auth(format!("missing {provider} API key; set {env_var}"))
                 .with_provider(provider)
+                .with_suggested_fix(suggested_fix)
         })
 }
 
@@ -203,7 +245,7 @@ pub(crate) fn exa_base_url() -> String {
         .unwrap_or_else(|_| EXA_DEFAULT_BASE_URL.to_string())
 }
 
-fn depth_name(depth: DepthArg) -> &'static str {
+pub(crate) fn depth_name(depth: DepthArg) -> &'static str {
     match depth {
         DepthArg::Quick => "quick",
         DepthArg::Standard => "standard",
@@ -211,7 +253,7 @@ fn depth_name(depth: DepthArg) -> &'static str {
     }
 }
 
-fn verify_name(verify: VerifyArg) -> &'static str {
+pub(crate) fn verify_name(verify: VerifyArg) -> &'static str {
     match verify {
         VerifyArg::Adaptive => "adaptive",
         VerifyArg::Paranoid => "paranoid",

@@ -6,12 +6,14 @@ use serde_json::to_value;
 
 use crate::cli::{DoctorArgs, GlobalArgs};
 use crate::commands::CommandSuccess;
-use crate::commands::ask::{cost_from_spend, exa_base_url, require_key, retries_from_spend};
+use crate::commands::ask::{
+    cost_from_spend, depth_name, exa_base_url, require_key, retries_from_spend, verify_name,
+};
 use crate::config::Config;
 use crate::envelope::{Budget, Diagnostics, SuccessEnvelope};
 use crate::error::{Provider, ReconError};
 use crate::providers::cerebras::{CerebrasClient, ChatOpts, Message};
-use crate::providers::exa::{ExaClient, SearchProvider};
+use crate::providers::exa::ExaClient;
 use crate::providers::new_spend;
 
 #[derive(Debug, Serialize)]
@@ -135,13 +137,13 @@ fn offline_checks(cfg: &Config, global: &GlobalArgs) -> Vec<DoctorCheck> {
             "config.resolved",
             "config",
             &format!(
-                "model={}, apiBase={}, exaBase={}, maxConcurrency={}, depth={:?}, verify={:?}",
+                "model={}, apiBase={}, exaBase={}, maxConcurrency={}, depth={}, verify={}",
                 global.model.as_deref().unwrap_or(&cfg.model),
                 cfg.api_base,
                 exa_base_url(),
                 cfg.max_concurrency,
-                global.depth,
-                global.verify
+                depth_name(global.depth),
+                verify_name(global.verify)
             ),
         ),
     ]
@@ -170,7 +172,7 @@ fn probe_cerebras(client: &CerebrasClient) -> DoctorCheck {
 }
 
 fn probe_exa(client: &ExaClient) -> DoctorCheck {
-    match client.search("recon doctor probe") {
+    match client.probe() {
         Ok(_) => ok_check("online.exa", "auth", "Exa search probe succeeded"),
         Err(err) => auth_probe_error("online.exa", Provider::Exa, "EXA_API_KEY", err),
     }
@@ -191,7 +193,9 @@ fn auth_probe_error(
         location: Some(env_var.to_string()),
         fix_available: false,
         remediation: Some(Remediation {
-            summary: format!("set a valid {provider} API key"),
+            summary: format!(
+                "set a valid {provider} API key; recon doctor --online --json to re-check after fixing the key"
+            ),
             command: format!("export {env_var}=..."),
             reversible: false,
         }),

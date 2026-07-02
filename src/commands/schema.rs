@@ -41,45 +41,139 @@ fn response_schema() -> Value {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$id": "recon.cli.response.v1",
         "type": "object",
-        "additionalProperties": false,
         "required": ["schema", "ok", "command", "requestId", "data", "costDollars", "budget", "diagnostics"],
         "properties": {
             "schema": {"const": "recon.cli.response.v1"},
             "ok": {"const": true},
-            "command": {"type": "string"},
+            "command": {"enum": ["ask", "doctor", "capabilities", "schema", "help", "version"]},
             "requestId": {"type": "string"},
-            "data": {
-                "type": "object",
-                "required": ["question", "outcome", "claims", "searchTrail", "uncertainties"],
-                "properties": {
-                    "question": {"type": "string"},
-                    "outcome": {"enum": ["answered", "partial", "unanswered"]},
-                    "claims": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "required": ["claim", "sourceUrl", "quote", "verdict", "note", "published"],
-                            "properties": {
-                                "claim": {"type": "string"},
-                                "sourceUrl": {"type": "string"},
-                                "quote": {"type": ["string", "null"]},
-                                "verdict": {"enum": ["supported", "partial", "unsupported", "no_source"]},
-                                "note": {"type": "string"},
-                                "published": {"type": ["string", "null"]}
+            "data": {"oneOf": [
+                {
+                    "type": "object",
+                    "description": "ask success payload",
+                    "required": ["question", "outcome", "claims", "searchTrail", "uncertainties"],
+                    "properties": {
+                        "question": {"type": "string"},
+                        "outcome": {"enum": ["answered", "partial", "unanswered"]},
+                        "claims": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "required": ["claim", "sourceUrl", "quote", "verdict", "note", "published"],
+                                "properties": {
+                                    "claim": {"type": "string"},
+                                    "sourceUrl": {"type": "string"},
+                                    "quote": {"type": ["string", "null"]},
+                                    "verdict": {"enum": ["supported", "partial", "unsupported", "no_source"]},
+                                    "note": {"type": "string"},
+                                    "published": {"type": ["string", "null"]}
+                                }
                             }
-                        }
-                    },
-                    "searchTrail": {
-                        "type": "array",
-                        "items": {
+                        },
+                        "searchTrail": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "required": ["query", "results"],
+                                "properties": {"query": {"type": "string"}, "results": {"type": "integer"}}
+                            }
+                        },
+                        "uncertainties": {"type": "array", "items": {"type": "string"}},
+                        "brief": {"type": ["string", "null"]}
+                    }
+                },
+                {
+                    "type": "object",
+                    "description": "ask dry-run payload",
+                    "required": ["question", "outcome", "dryRun", "plannedFanout", "projectedWorstCaseCost"],
+                    "properties": {
+                        "question": {"type": "string"},
+                        "outcome": {"enum": ["answered", "partial", "unanswered"]},
+                        "dryRun": {"const": true},
+                        "plannedFanout": {
                             "type": "object",
-                            "required": ["query", "results"],
-                            "properties": {"query": {"type": "string"}, "results": {"type": "integer"}}
-                        }
-                    },
-                    "uncertainties": {"type": "array", "items": {"type": "string"}}
+                            "properties": {
+                                "tier": {"enum": ["quick", "standard", "deep"]},
+                                "workers": {"type": "integer"},
+                                "decomposeCalls": {"type": "integer"},
+                                "maxWorkerRounds": {"type": "integer"},
+                                "verify": {"enum": ["adaptive", "paranoid", "off"]},
+                                "refinementPass": {"type": "boolean"},
+                                "note": {"type": "string"}
+                            }
+                        },
+                        "projectedWorstCaseCost": {"type": "number"}
+                    }
+                },
+                {
+                    "type": "object",
+                    "description": "doctor report payload",
+                    "required": ["schemaVersion", "status", "summary", "checks"],
+                    "properties": {
+                        "schemaVersion": {"type": "string"},
+                        "status": {"enum": ["healthy", "degraded", "broken"]},
+                        "summary": {
+                            "type": "object",
+                            "properties": {
+                                "total": {"type": "integer"},
+                                "ok": {"type": "integer"},
+                                "warn": {"type": "integer"},
+                                "error": {"type": "integer"},
+                                "fixable": {"type": "integer"}
+                            }
+                        },
+                        "checks": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "id": {"type": "string"},
+                                    "category": {"type": "string"},
+                                    "severity": {"type": "string"},
+                                    "ok": {"type": "boolean"},
+                                    "detail": {"type": "string"},
+                                    "location": {"type": ["string", "null"]},
+                                    "fixAvailable": {"type": "boolean"},
+                                    "remediation": {"type": ["object", "null"]}
+                                }
+                            }
+                        },
+                        "runId": {"type": ["string", "null"]}
+                    }
+                },
+                {
+                    "type": "object",
+                    "description": "capabilities payload (free-form object)",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "version": {"type": "string"},
+                        "schema": {"type": "string"},
+                        "commands": {"type": "array"},
+                        "globalFlags": {"type": "array"},
+                        "exitCodes": {"type": "object"},
+                        "envVars": {"type": "array"},
+                        "tiers": {"type": "array"},
+                        "budgetUnitCosts": {"type": "object"},
+                        "schemas": {"type": "object"}
+                    }
+                },
+                {
+                    "type": "object",
+                    "description": "schema payload",
+                    "properties": {
+                        "response": {"type": "object"},
+                        "error": {"type": "object"}
+                    }
+                },
+                {
+                    "type": "object",
+                    "description": "help/version payload",
+                    "required": ["text"],
+                    "properties": {
+                        "text": {"type": "string"}
+                    }
                 }
-            },
+            ]},
             "costDollars": {
                 "type": "object",
                 "required": ["model", "search", "total", "estimated"],
@@ -109,7 +203,7 @@ fn error_schema() -> Value {
             "requestId": {"type": "string"},
             "error": {
                 "type": "object",
-                "required": ["code", "category", "retryable", "provider", "message", "partial"],
+                "required": ["code", "category", "retryable", "provider", "message", "partial", "suggestedFix"],
                 "properties": {
                     "code": {"enum": ["usage", "auth", "config", "network", "upstream", "rate_limited", "partial", "no_input"]},
                     "category": {"type": "string"},
@@ -117,8 +211,7 @@ fn error_schema() -> Value {
                     "provider": {"enum": ["cerebras", "exa", null]},
                     "message": {"type": "string"},
                     "partial": {"type": ["object", "array", "string", "number", "boolean", "null"]},
-                    "suggestedFix": {"type": "string"},
-                    "details": {"type": "object"}
+                    "suggestedFix": {"type": ["string", "null"]}
                 }
             }
         }

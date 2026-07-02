@@ -277,6 +277,22 @@ pub fn run(
     })
 }
 
+/// Thin pub wrapper that runs `brief::synthesize_brief` with the same
+/// chat/budget/spend the run used. Returns:
+/// - `Ok(Some(text))` on success,
+/// - `Ok(None)` when the budget gate refused the synthesis chat call,
+/// - `Err(_)` on an upstream chat failure.
+pub fn synthesize_brief(
+    data: &ResearchData,
+    chat: &dyn ChatProvider,
+    search: &dyn SearchProvider,
+    budget: &Budget,
+    params: &RunParams,
+) -> Result<Option<String>, ReconError> {
+    let ctx = StageContext::new(chat, search, budget, params);
+    brief::synthesize_brief(data, &ctx)
+}
+
 fn prepare_subquestions(
     question: &str,
     depth: Depth,

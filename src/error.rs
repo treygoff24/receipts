@@ -33,6 +33,7 @@ pub struct ErrorContext {
     provider: Option<Provider>,
     retryable: bool,
     partial: Option<Value>,
+    suggested_fix: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -73,6 +74,11 @@ pub enum ReconError {
         context: ErrorContext,
     },
 
+    /// Partial result from a hard pipeline failure. Budget-driven partials
+    /// (exit 10) must use the SUCCESS envelope path in `commands::ask` (exit
+    /// 10 via the success envelope, not via this error variant). This variant
+    /// exists for hard failures where an error envelope carries `error.partial`
+    /// data alongside the failure context.
     #[error("partial result: {message}")]
     Partial {
         message: String,
@@ -151,6 +157,12 @@ impl ReconError {
         self
     }
 
+    #[must_use]
+    pub fn with_suggested_fix(mut self, suggested_fix: impl Into<String>) -> Self {
+        self.context_mut().suggested_fix = Some(suggested_fix.into());
+        self
+    }
+
     pub fn provider(&self) -> Option<Provider> {
         self.context().provider
     }
@@ -161,6 +173,10 @@ impl ReconError {
 
     pub fn partial_data(&self) -> Option<&Value> {
         self.context().partial.as_ref()
+    }
+
+    pub fn suggested_fix(&self) -> Option<&str> {
+        self.context().suggested_fix.as_deref()
     }
 
     /// Stable exit code for the process, per the CLI contract.
@@ -238,10 +254,20 @@ mod tests {
     }
 
     #[test]
+    fn suggested_fix_builder_sets_context() {
+        let err = ReconError::auth("missing Cerebras API key")
+            .with_provider(Provider::Cerebras)
+            .with_suggested_fix("set CEREBRAS_API_KEY");
+
+        assert_eq!(err.suggested_fix(), Some("set CEREBRAS_API_KEY"));
+    }
+
+    #[test]
     fn default_context_has_no_provider_and_not_retryable() {
         let err = ReconError::usage("bad flag");
         assert_eq!(err.provider(), None);
         assert!(!err.is_retryable());
         assert_eq!(err.partial_data(), None);
+        assert_eq!(err.suggested_fix(), None);
     }
 }

@@ -62,12 +62,12 @@ pub fn run(_global: &GlobalArgs) -> Result<CommandSuccess, ReconError> {
         "exitCodes": {
             "0": "ok",
             "1": "usage",
-            "2": "auth",
+            "2": "auth; doctor emits its structured report on stdout even at exit 2",
             "3": "config",
             "4": "network",
             "5": "upstream",
             "6": "rate-limit",
-            "10": "partial; stdout carries ok:true success envelope with data.outcome=partial and budget.hit set",
+            "10": "partial; budget/partial-driven regardless of claim count; stdout carries ok:true success envelope with data.outcome=partial and budget.hit set; a zero-claim partial means the budget closed before work completed",
             "11": "no-input"
         },
         "envVars": [

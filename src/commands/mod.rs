@@ -5,11 +5,11 @@ pub mod schema;
 
 use clap::Parser;
 use clap::error::ErrorKind;
-use serde_json::json;
-use uuid::Uuid;
 
 use crate::cli::{Cli, Commands, args_with_default_ask, edit_distance};
-use crate::envelope::{ErrorEnvelope, SuccessEnvelope, emit_error, emit_success};
+use crate::envelope::{
+    Budget, CostDollars, Diagnostics, ErrorEnvelope, SuccessEnvelope, emit_error, emit_success,
+};
 
 pub struct CommandSuccess {
     pub envelope: SuccessEnvelope,
@@ -29,6 +29,32 @@ pub fn run() -> i32 {
                 ErrorKind::DisplayHelp | ErrorKind::DisplayVersion
             ) =>
         {
+            if force_json {
+                let text = err.to_string();
+                let command = if matches!(err.kind(), ErrorKind::DisplayVersion) {
+                    "version"
+                } else {
+                    "help"
+                };
+                let envelope = SuccessEnvelope::new(
+                    command,
+                    serde_json::json!({"text": text}),
+                    CostDollars {
+                        model: 0.0,
+                        search: 0.0,
+                        total: 0.0,
+                        estimated: false,
+                    },
+                    Budget { hit: None },
+                    Diagnostics {
+                        duration_ms: 0,
+                        retries: 0,
+                    },
+                    None,
+                );
+                emit_success(&envelope, true);
+                return 0;
+            }
             err.exit();
         }
         Err(err) => return emit_parse_error(&raw_args, err),
@@ -45,7 +71,7 @@ pub fn run() -> i32 {
                 && !force_json
                 && std::io::IsTerminal::is_terminal(&std::io::stdout())
             {
-                println!("hint: {hint}");
+                eprintln!("hint: {hint}");
             }
             success.exit_code
         }
@@ -78,27 +104,11 @@ fn command_name(command: &Commands) -> &'static str {
 fn emit_parse_error(raw_args: &[std::ffi::OsString], err: clap::Error) -> i32 {
     let message = clean_clap_message(&err.to_string());
     let suggested_fix = suggested_fix(raw_args, &message);
-    let payload = json!({
-        "schema": "recon.cli.error.v1",
-        "ok": false,
-        "command": parse_command_name(raw_args),
-        "requestId": Uuid::new_v4().to_string(),
-        "error": {
-            "code": "usage",
-            "category": "usage",
-            "retryable": false,
-            "provider": null,
-            "message": format!("usage error: {message}"),
-            "partial": null,
-            "suggestedFix": suggested_fix,
-            "details": {"suggestedFix": suggested_fix}
-        }
-    });
-    eprintln!(
-        "{}",
-        serde_json::to_string(&payload).expect("parse error serializes")
-    );
-    1
+    let command = parse_command_name(raw_args);
+    let recon_err = crate::error::ReconError::usage(format!("usage error: {message}"))
+        .with_suggested_fix(suggested_fix);
+    let envelope = ErrorEnvelope::from_error(command, &recon_err, None);
+    emit_error(&envelope, false)
 }
 
 fn clean_clap_message(message: &str) -> String {

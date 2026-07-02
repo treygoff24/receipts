@@ -19,6 +19,8 @@ pub const VERIFICATION_WORST_CASE_COST: f64 = 0.002;
 pub const EXTRACT_WORST_CASE_COST: f64 = 0.01;
 /// Measured prototype contents fetch ≈ $0.003, rounded up.
 pub const CONTENTS_WORST_CASE_COST: f64 = 0.005;
+/// Measured prototype Exa search call ≈ $0.01 per call (numResults 4 + text).
+pub const SEARCH_CALL_WORST_CASE_COST: f64 = 0.01;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkerTask {

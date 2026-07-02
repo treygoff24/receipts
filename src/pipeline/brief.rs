@@ -8,10 +8,6 @@ use crate::tiers::WORKER_ROUND_WORST_CASE_COST;
 /// - `Ok(None)` when the budget gate refused the synthesis chat call (brief
 ///   skipped: budget),
 /// - `Err(_)` on an upstream chat failure.
-///
-/// Not yet wired into the `run` pipeline; the `--brief` CLI flag lands in a
-/// later wave.
-#[allow(dead_code)]
 pub(crate) fn synthesize_brief(
     data: &ResearchData,
     ctx: &StageContext<'_>,
@@ -53,7 +49,6 @@ pub(crate) fn synthesize_brief(
     Ok(Some(response.content))
 }
 
-#[allow(dead_code)]
 fn verdict_label(verdict: Verdict) -> &'static str {
     match verdict {
         Verdict::Supported => "supported",

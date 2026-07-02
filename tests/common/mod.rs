@@ -66,19 +66,19 @@ impl Drop for MockServer {
 }
 
 fn handle_client(mut stream: TcpStream) {
-    let Ok((path, body)) = read_request(&mut stream) else {
+    let Ok((path, body, headers)) = read_request(&mut stream) else {
         return;
     };
     let response = match path.as_str() {
         "/chat/completions" => chat_response(&body),
-        "/search" => search_response(),
+        "/search" => search_response(&headers),
         "/contents" => contents_response(),
         _ => (404, json!({"error":"not found"})),
     };
     write_json(&mut stream, response.0, &response.1);
 }
 
-fn read_request(stream: &mut TcpStream) -> std::io::Result<(String, String)> {
+fn read_request(stream: &mut TcpStream) -> std::io::Result<(String, String, String)> {
     let mut buf = Vec::new();
     let mut tmp = [0; 1024];
     loop {
@@ -97,7 +97,7 @@ fn read_request(stream: &mut TcpStream) -> std::io::Result<(String, String)> {
         .position(|window| window == b"\r\n\r\n")
         .map(|idx| idx + 4)
         .unwrap_or(buf.len());
-    let headers = String::from_utf8_lossy(&buf[..header_end]);
+    let headers = String::from_utf8_lossy(&buf[..header_end]).to_string();
     let path = headers
         .lines()
         .next()
@@ -122,7 +122,7 @@ fn read_request(stream: &mut TcpStream) -> std::io::Result<(String, String)> {
         buf.extend_from_slice(&tmp[..n]);
     }
     let body = String::from_utf8_lossy(&buf[header_end..header_end + content_length]).to_string();
-    Ok((path, body))
+    Ok((path, body, headers))
 }
 
 fn chat_response(body: &str) -> (u16, Value) {
@@ -167,7 +167,15 @@ fn chat_response(body: &str) -> (u16, Value) {
     )
 }
 
-fn search_response() -> (u16, Value) {
+fn search_response(headers: &str) -> (u16, Value) {
+    // Simulate a 401 when the Exa API key is "bad-exa" (used by doctor
+    // --online bad-key tests).
+    let bad_key = headers
+        .lines()
+        .any(|line| line.eq_ignore_ascii_case("x-api-key: bad-exa"));
+    if bad_key {
+        return (401, json!({"error":"invalid api key"}));
+    }
     (
         200,
         json!({
