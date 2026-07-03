@@ -13,9 +13,9 @@ Use it when you need a citable answer, a fact-check with receipts, or ground tru
 Pick the first available path:
 
 ```sh
-brew install treygoff/tap/receipts
+brew install treygoff24/tap/receipts
 # or
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/treygoff/receipts/releases/latest/download/receipts-installer.sh | sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/treygoff24/receipts/releases/latest/download/receipts-installer.sh | sh
 # or
 cargo binstall receipts || cargo install receipts
 ```

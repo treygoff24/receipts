@@ -9,7 +9,7 @@ Ask a question, get back claims. Every claim carries a source URL, a quote, and 
 
 <p align="center">
   <a href="https://crates.io/crates/receipts"><img src="https://img.shields.io/crates/v/receipts.svg" alt="crates.io"></a>
-  <a href="https://github.com/treygoff/receipts/actions/workflows/ci.yml"><img src="https://github.com/treygoff/receipts/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/treygoff24/receipts/actions/workflows/ci.yml"><img src="https://github.com/treygoff24/receipts/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License"></a>
 </p>
 
@@ -57,13 +57,13 @@ The whole tool is honest about being a tool. Stdout is reserved for result envel
 Homebrew (macOS/Linux):
 
 ```sh
-brew install treygoff/tap/receipts
+brew install treygoff24/tap/receipts
 ```
 
 Shell installer (macOS/Linux):
 
 ```sh
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/treygoff/receipts/releases/latest/download/receipts-installer.sh | sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/treygoff24/receipts/releases/latest/download/receipts-installer.sh | sh
 ```
 
 Cargo:
