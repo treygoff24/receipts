@@ -99,3 +99,7 @@ receipts schema all --json      # JSON Schema for both envelopes
 ```
 
 If anything in this file disagrees with `capabilities` output, trust `capabilities` — it's generated from the code.
+
+## Maintainers
+
+To cut a release, follow `.claude/skills/release/SKILL.md` (also reachable as the `release` skill in Claude Code and Codex). Deterministic checks live in `scripts/preflight-release.sh`.
