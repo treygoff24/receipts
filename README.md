@@ -13,7 +13,7 @@ Ask a question, get back claims. Every claim carries a source URL, a quote, and 
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License"></a>
 </p>
 
-> 🤖 **Are you an agent?** Skip the sales pitch and read [AGENTS.md](AGENTS.md) — it has the install one-liner, the env vars your human needs to set, and the full machine contract.
+> 🤖 **Are you an agent?** Skip the sales pitch and read [AGENTS.md](AGENTS.md) — it has the install one-liner, the env vars your human needs to set, and the full machine contract. Or install the usage skill directly: `npx skills add treygoff24/receipts`
 
 ---
 

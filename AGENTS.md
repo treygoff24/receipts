@@ -8,6 +8,8 @@ You are probably an AI agent setting this up for a human, or using it yourself. 
 
 Use it when you need a citable answer, a fact-check with receipts, or ground truth for a claim you're about to put in a document.
 
+A packaged version of this contract ships as an agent skill: `npx skills add treygoff24/receipts` installs it into your skills directory (Claude Code, Codex, Cursor, and friends).
+
 ## Install
 
 Pick the first available path:
