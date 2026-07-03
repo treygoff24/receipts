@@ -1,3 +1,4 @@
 /target
 .delegate/
 /ship-wizard.sh
+.DS_Store
