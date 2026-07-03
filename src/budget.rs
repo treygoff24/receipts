@@ -27,7 +27,7 @@ impl Budget {
     ///
     /// # Concurrency contract
     ///
-    /// Calls **must be serialized by the caller** — recon serializes via
+    /// Calls **must be serialized by the caller** — receipts serializes via
     /// `StageContext::may_launch`'s `budget_gate` mutex, which holds an
     /// exclusive lock across the read of `spend` and the elapsed-time check.
     /// This check is TOCTOU-racy without that serialization: it reads `spend`

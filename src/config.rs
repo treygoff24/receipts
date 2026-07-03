@@ -1,4 +1,4 @@
-//! Config precedence: env > `~/.config/recon/config.toml` > built-in defaults.
+//! Config precedence: env > `~/.config/receipts/config.toml` > built-in defaults.
 //! Missing API keys are not a load-time error — `doctor` reports them, and
 //! `ask` fails with an Auth error only when a key is actually needed.
 
@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use crate::error::ReconError;
+use crate::error::ReceiptsError;
 
 pub const DEFAULT_MODEL: &str = "gemma-4-31b";
 pub const DEFAULT_API_BASE: &str = "https://api.cerebras.ai/v1";
@@ -55,18 +55,18 @@ struct FileConfig {
 
 fn default_config_path() -> Option<PathBuf> {
     let home = env::var_os("HOME")?;
-    Some(PathBuf::from(home).join(".config/recon/config.toml"))
+    Some(PathBuf::from(home).join(".config/receipts/config.toml"))
 }
 
-fn read_file_config(path: &Path) -> Result<FileConfig, ReconError> {
+fn read_file_config(path: &Path) -> Result<FileConfig, ReceiptsError> {
     let text = fs::read_to_string(path).map_err(|e| {
-        ReconError::config(format!(
+        ReceiptsError::config(format!(
             "failed to read config file {}: {e}",
             path.display()
         ))
     })?;
     toml::from_str(&text).map_err(|e| {
-        ReconError::config(format!(
+        ReceiptsError::config(format!(
             "failed to parse config file {}: {e}",
             path.display()
         ))
@@ -74,15 +74,15 @@ fn read_file_config(path: &Path) -> Result<FileConfig, ReconError> {
 }
 
 impl Config {
-    /// Loads config from `~/.config/recon/config.toml` (if present) merged
+    /// Loads config from `~/.config/receipts/config.toml` (if present) merged
     /// under environment variables, falling back to built-in defaults.
-    pub fn load() -> Result<Self, ReconError> {
+    pub fn load() -> Result<Self, ReceiptsError> {
         Self::load_from(default_config_path().as_deref())
     }
 
     /// Same as `load`, but with an explicit (possibly absent) config file
     /// path — the seam tests use to avoid touching the real home directory.
-    fn load_from(path: Option<&Path>) -> Result<Self, ReconError> {
+    fn load_from(path: Option<&Path>) -> Result<Self, ReceiptsError> {
         let file_cfg = match path {
             Some(p) if p.exists() => read_file_config(p)?,
             _ => FileConfig::default(),
@@ -90,12 +90,12 @@ impl Config {
 
         let defaults = Config::default();
 
-        let exa_search_type = env::var("RECON_EXA_SEARCH_TYPE")
+        let exa_search_type = env::var("RECEIPTS_EXA_SEARCH_TYPE")
             .ok()
             .or(file_cfg.exa_search_type)
             .unwrap_or(defaults.exa_search_type);
         if !EXA_SEARCH_TYPES.contains(&exa_search_type.as_str()) {
-            return Err(ReconError::config(format!(
+            return Err(ReceiptsError::config(format!(
                 "invalid exa search type {exa_search_type:?}; expected one of: {}",
                 EXA_SEARCH_TYPES.join(", ")
             )));
@@ -106,15 +106,15 @@ impl Config {
                 .ok()
                 .or(file_cfg.cerebras_api_key),
             exa_api_key: env::var("EXA_API_KEY").ok().or(file_cfg.exa_api_key),
-            model: env::var("RECON_MODEL")
+            model: env::var("RECEIPTS_MODEL")
                 .ok()
                 .or(file_cfg.model)
                 .unwrap_or(defaults.model),
-            api_base: env::var("RECON_API_BASE")
+            api_base: env::var("RECEIPTS_API_BASE")
                 .ok()
                 .or(file_cfg.api_base)
                 .unwrap_or(defaults.api_base),
-            max_concurrency: env::var("RECON_MAX_CONCURRENCY")
+            max_concurrency: env::var("RECEIPTS_MAX_CONCURRENCY")
                 .ok()
                 .and_then(|s| s.parse::<u32>().ok())
                 .or(file_cfg.max_concurrency)
@@ -139,10 +139,10 @@ mod tests {
     const ENV_KEYS: &[&str] = &[
         "CEREBRAS_API_KEY",
         "EXA_API_KEY",
-        "RECON_MODEL",
-        "RECON_API_BASE",
-        "RECON_MAX_CONCURRENCY",
-        "RECON_EXA_SEARCH_TYPE",
+        "RECEIPTS_MODEL",
+        "RECEIPTS_API_BASE",
+        "RECEIPTS_MAX_CONCURRENCY",
+        "RECEIPTS_EXA_SEARCH_TYPE",
     ];
 
     fn clear_env() {
@@ -178,8 +178,8 @@ mod tests {
         clear_env();
 
         set_env("CEREBRAS_API_KEY", "env-cerebras-key");
-        set_env("RECON_MODEL", "some-other-model");
-        set_env("RECON_MAX_CONCURRENCY", "7");
+        set_env("RECEIPTS_MODEL", "some-other-model");
+        set_env("RECEIPTS_MAX_CONCURRENCY", "7");
 
         let cfg = Config::load_from(None).unwrap();
 
@@ -197,7 +197,7 @@ mod tests {
         let _guard = env_lock().lock().unwrap();
         clear_env();
 
-        let dir = std::env::temp_dir().join(format!("recon-test-{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("receipts-test-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("config.toml");
         fs::write(
@@ -225,12 +225,12 @@ mod tests {
         let _guard = env_lock().lock().unwrap();
         clear_env();
 
-        let dir = std::env::temp_dir().join(format!("recon-test-{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("receipts-test-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("config.toml");
         fs::write(&path, r#"model = "file-model""#).unwrap();
 
-        set_env("RECON_MODEL", "env-model");
+        set_env("RECEIPTS_MODEL", "env-model");
 
         let cfg = Config::load_from(Some(&path)).unwrap();
         assert_eq!(cfg.model, "env-model");
@@ -259,7 +259,7 @@ mod tests {
         let cfg = Config::load_from(None).unwrap();
         assert_eq!(cfg.exa_search_type, "fast");
 
-        set_env("RECON_EXA_SEARCH_TYPE", "instant");
+        set_env("RECEIPTS_EXA_SEARCH_TYPE", "instant");
         let cfg = Config::load_from(None).unwrap();
         assert_eq!(cfg.exa_search_type, "instant");
 
@@ -271,7 +271,7 @@ mod tests {
         let _guard = env_lock().lock().unwrap();
         clear_env();
 
-        set_env("RECON_EXA_SEARCH_TYPE", "warp-speed");
+        set_env("RECEIPTS_EXA_SEARCH_TYPE", "warp-speed");
         let err = Config::load_from(None).unwrap_err();
         assert_eq!(err.exit_code(), 3);
         assert!(err.to_string().contains("warp-speed"));
@@ -284,7 +284,7 @@ mod tests {
         let _guard = env_lock().lock().unwrap();
         clear_env();
 
-        let dir = std::env::temp_dir().join(format!("recon-test-{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("receipts-test-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("config.toml");
         fs::write(&path, "not valid toml [[[").unwrap();

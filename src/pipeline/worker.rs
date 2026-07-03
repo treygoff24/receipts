@@ -1,6 +1,6 @@
 use serde_json::{Value, json};
 
-use crate::error::ReconError;
+use crate::error::ReceiptsError;
 use crate::pipeline::{SearchTrailEntry, SourceMeta, StageContext, parse_model_json};
 use crate::providers::cerebras::{ChatOpts, Message, ToolCall};
 use crate::providers::exa::SourceDoc;
@@ -18,7 +18,7 @@ pub struct WorkerAnswer {
 pub(crate) fn run_worker(
     task: WorkerTask,
     ctx: &StageContext<'_>,
-) -> Result<WorkerAnswer, ReconError> {
+) -> Result<WorkerAnswer, ReceiptsError> {
     let mut messages = vec![
         Message::system(format!(
             "You are a research agent. Use the search tool (multiple queries if needed) to answer the question with specific, dated, sourced facts. When done, answer in plain text citing URLs inline. Today is {}.",
@@ -112,7 +112,7 @@ fn tool_calls_value(calls: &[ToolCall]) -> Value {
     )
 }
 
-fn run_tool_call(call: &ToolCall, ctx: &StageContext<'_>) -> Result<String, ReconError> {
+fn run_tool_call(call: &ToolCall, ctx: &StageContext<'_>) -> Result<String, ReceiptsError> {
     if call.function_name != "search" {
         return Ok(format!("unsupported tool: {}", call.function_name));
     }
@@ -146,18 +146,18 @@ fn record_results(
     query: &str,
     results: &[SourceDoc],
     ctx: &StageContext<'_>,
-) -> Result<(), ReconError> {
+) -> Result<(), ReceiptsError> {
     record_trail(query, results.len(), ctx)?;
     let mut cache = ctx
         .state
         .source_cache
         .lock()
-        .map_err(|_| ReconError::upstream("source cache lock poisoned"))?;
+        .map_err(|_| ReceiptsError::upstream("source cache lock poisoned"))?;
     let mut meta = ctx
         .state
         .source_meta
         .lock()
-        .map_err(|_| ReconError::upstream("source metadata lock poisoned"))?;
+        .map_err(|_| ReceiptsError::upstream("source metadata lock poisoned"))?;
     for doc in results {
         cache.insert(doc.url.clone(), doc.text.clone());
         meta.insert(
@@ -170,11 +170,11 @@ fn record_results(
     Ok(())
 }
 
-fn record_trail(query: &str, results: usize, ctx: &StageContext<'_>) -> Result<(), ReconError> {
+fn record_trail(query: &str, results: usize, ctx: &StageContext<'_>) -> Result<(), ReceiptsError> {
     ctx.state
         .search_trail
         .lock()
-        .map_err(|_| ReconError::upstream("search trail lock poisoned"))?
+        .map_err(|_| ReceiptsError::upstream("search trail lock poisoned"))?
         .push(SearchTrailEntry {
             query: query.to_string(),
             results,

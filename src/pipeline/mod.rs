@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 
 use crate::budget::Budget;
-use crate::error::{Provider, ReconError};
+use crate::error::{Provider, ReceiptsError};
 use crate::providers::cerebras::{CerebrasClient, ChatOpts, ChatResponse, Message, json_repair};
 use crate::providers::exa::SearchProvider;
 use crate::providers::{SharedSpend, new_spend};
@@ -22,11 +22,11 @@ use crate::tiers::{
 pub use verify::VerifyPolicy;
 
 pub trait ChatProvider: Send + Sync {
-    fn chat(&self, messages: &[Message], opts: ChatOpts) -> Result<ChatResponse, ReconError>;
+    fn chat(&self, messages: &[Message], opts: ChatOpts) -> Result<ChatResponse, ReceiptsError>;
 }
 
 impl ChatProvider for CerebrasClient {
-    fn chat(&self, messages: &[Message], opts: ChatOpts) -> Result<ChatResponse, ReconError> {
+    fn chat(&self, messages: &[Message], opts: ChatOpts) -> Result<ChatResponse, ReceiptsError> {
         CerebrasClient::chat(self, messages, opts)
     }
 }
@@ -174,17 +174,17 @@ impl<'a> StageContext<'a> {
         }
     }
 
-    pub fn may_launch(&self, projected_unit_cost: f64) -> Result<bool, ReconError> {
+    pub fn may_launch(&self, projected_unit_cost: f64) -> Result<bool, ReceiptsError> {
         let _gate = self
             .state
             .budget_gate
             .lock()
-            .map_err(|_| ReconError::upstream("budget gate lock poisoned"))?;
+            .map_err(|_| ReceiptsError::upstream("budget gate lock poisoned"))?;
         let spend = self
             .state
             .spend
             .lock()
-            .map_err(|_| ReconError::upstream("spend meter lock poisoned"))?;
+            .map_err(|_| ReceiptsError::upstream("spend meter lock poisoned"))?;
         Ok(self.budget.may_launch(&spend, projected_unit_cost))
     }
 }
@@ -197,7 +197,7 @@ pub fn run(
     chat: &dyn ChatProvider,
     search: &dyn SearchProvider,
     params: RunParams,
-) -> Result<ResearchData, ReconError> {
+) -> Result<ResearchData, ReceiptsError> {
     let ctx = StageContext::new(chat, search, budget, &params);
     let mut uncertainties = Vec::new();
 
@@ -244,7 +244,7 @@ pub fn run(
         .state
         .search_trail
         .lock()
-        .map_err(|_| ReconError::upstream("search trail lock poisoned"))?
+        .map_err(|_| ReceiptsError::upstream("search trail lock poisoned"))?
         .clone();
     if let Some(hit) = budget.hit() {
         uncertainties.push(format!("budget hit: {hit}"));
@@ -288,7 +288,7 @@ pub fn synthesize_brief(
     search: &dyn SearchProvider,
     budget: &Budget,
     params: &RunParams,
-) -> Result<Option<String>, ReconError> {
+) -> Result<Option<String>, ReceiptsError> {
     let ctx = StageContext::new(chat, search, budget, params);
     brief::synthesize_brief(data, &ctx)
 }
@@ -298,7 +298,7 @@ fn prepare_subquestions(
     depth: Depth,
     ctx: &StageContext<'_>,
     uncertainties: &mut Vec<String>,
-) -> Result<Vec<String>, ReconError> {
+) -> Result<Vec<String>, ReceiptsError> {
     if !depth.needs_decompose() {
         return Ok(vec![question.to_string()]);
     }
@@ -336,7 +336,7 @@ fn launch_workers(
     tasks: Vec<crate::tiers::WorkerTask>,
     ctx: &StageContext<'_>,
     uncertainties: &mut Vec<String>,
-) -> Result<Vec<worker::WorkerAnswer>, ReconError> {
+) -> Result<Vec<worker::WorkerAnswer>, ReceiptsError> {
     let mut out = Vec::new();
     let mut iter = tasks.into_iter().peekable();
 
@@ -456,12 +456,12 @@ where
     out
 }
 
-pub(crate) fn parse_model_json<T>(text: &str) -> Result<T, ReconError>
+pub(crate) fn parse_model_json<T>(text: &str) -> Result<T, ReceiptsError>
 where
     T: for<'de> Deserialize<'de>,
 {
     serde_json::from_str(&json_repair(text)).map_err(|err| {
-        ReconError::upstream(format!("failed to parse model JSON: {err}"))
+        ReceiptsError::upstream(format!("failed to parse model JSON: {err}"))
             .with_provider(Provider::Cerebras)
             .with_retryable(false)
     })
@@ -471,7 +471,7 @@ pub(crate) fn chat_json<T>(
     chat: &dyn ChatProvider,
     messages: &[Message],
     opts: ChatOpts,
-) -> Result<T, ReconError>
+) -> Result<T, ReceiptsError>
 where
     T: for<'de> Deserialize<'de>,
 {
@@ -490,7 +490,7 @@ pub(crate) mod test_support {
     use std::collections::{HashMap, VecDeque};
     use std::sync::Mutex;
 
-    use crate::error::ReconError;
+    use crate::error::ReceiptsError;
     use crate::pipeline::{ChatProvider, StageContext};
     use crate::providers::cerebras::{ChatOpts, ChatResponse, Message, TokenUsage, ToolCall};
     use crate::providers::exa::{SearchProvider, SourceDoc};
@@ -518,7 +518,7 @@ pub(crate) mod test_support {
     }
 
     pub(crate) struct ScriptedChat {
-        responses: Mutex<VecDeque<Result<ChatResponse, ReconError>>>,
+        responses: Mutex<VecDeque<Result<ChatResponse, ReceiptsError>>>,
         pub messages: Mutex<Vec<Vec<Message>>>,
         pub opts: Mutex<Vec<ChatOpts>>,
     }
@@ -534,7 +534,11 @@ pub(crate) mod test_support {
     }
 
     impl ChatProvider for ScriptedChat {
-        fn chat(&self, messages: &[Message], opts: ChatOpts) -> Result<ChatResponse, ReconError> {
+        fn chat(
+            &self,
+            messages: &[Message],
+            opts: ChatOpts,
+        ) -> Result<ChatResponse, ReceiptsError> {
             self.messages.lock().unwrap().push(messages.to_vec());
             self.opts.lock().unwrap().push(opts);
             self.responses
@@ -554,7 +558,7 @@ pub(crate) mod test_support {
     }
 
     impl SearchProvider for FakeSearch {
-        fn search(&self, query: &str) -> Result<Vec<SourceDoc>, ReconError> {
+        fn search(&self, query: &str) -> Result<Vec<SourceDoc>, ReceiptsError> {
             self.searches.lock().unwrap().push(query.to_string());
             Ok(self
                 .search_results
@@ -565,7 +569,7 @@ pub(crate) mod test_support {
                 .unwrap_or_default())
         }
 
-        fn contents(&self, url: &str) -> Result<Option<String>, ReconError> {
+        fn contents(&self, url: &str) -> Result<Option<String>, ReceiptsError> {
             self.contents_calls.lock().unwrap().push(url.to_string());
             Ok(self
                 .contents_results

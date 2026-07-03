@@ -1,7 +1,7 @@
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::error::ReconError;
+use crate::error::ReceiptsError;
 use crate::pipeline::{ChatProvider, chat_json};
 use crate::providers::cerebras::{ChatOpts, Message};
 
@@ -15,7 +15,7 @@ pub fn decompose(
     count: usize,
     today: &str,
     chat: &dyn ChatProvider,
-) -> Result<Vec<String>, ReconError> {
+) -> Result<Vec<String>, ReceiptsError> {
     let prompt = format!(
         "Research question: {question}\n\nDecompose into {count} focused sub-questions that together answer it. Today is {today}."
     );

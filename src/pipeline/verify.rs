@@ -184,7 +184,7 @@ fn judge(
     source_text: &str,
     policy: VerifyPolicy,
     ctx: &StageContext<'_>,
-) -> Result<(Verdict, String), crate::error::ReconError> {
+) -> Result<(Verdict, String), crate::error::ReceiptsError> {
     let first = judge_once(candidate, source_text, ctx)?;
     let mut votes = vec![first.clone()];
 
@@ -216,7 +216,7 @@ fn judge_once(
     candidate: &ClaimCandidate,
     source_text: &str,
     ctx: &StageContext<'_>,
-) -> Result<VerdictOutput, crate::error::ReconError> {
+) -> Result<VerdictOutput, crate::error::ReceiptsError> {
     let prompt = format!(
         "CLAIM: {}\n\nSOURCE TEXT (from {}):\n{}\n\nDoes the source text support the claim? Be strict: SUPPORTED only if the text states it.",
         candidate.claim,

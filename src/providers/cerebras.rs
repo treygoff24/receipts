@@ -4,7 +4,7 @@ use std::time::Instant;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::error::{Provider, ReconError};
+use crate::error::{Provider, ReceiptsError};
 use crate::providers::{
     HttpFailure, SharedSpend, SleepFn, USER_AGENT, default_sleep, http_agent, join_url, new_spend,
     run_with_retries,
@@ -137,7 +137,11 @@ impl CerebrasClient {
         Arc::clone(&self.spend)
     }
 
-    pub fn chat(&self, messages: &[Message], opts: ChatOpts) -> Result<ChatResponse, ReconError> {
+    pub fn chat(
+        &self,
+        messages: &[Message],
+        opts: ChatOpts,
+    ) -> Result<ChatResponse, ReceiptsError> {
         let url = join_url(&self.base_url, "/chat/completions");
         let body = self.request_body(messages, opts);
         let start = Instant::now();
@@ -190,10 +194,10 @@ impl CerebrasClient {
             .map_err(|err| HttpFailure::Transport(err.to_string()))
     }
 
-    fn record_spend(&self, usage: &TokenUsage, retries: u32) -> Result<(), ReconError> {
+    fn record_spend(&self, usage: &TokenUsage, retries: u32) -> Result<(), ReceiptsError> {
         let dollars = model_cost_dollars(&self.model, usage);
         let mut spend = self.spend.lock().map_err(|_| {
-            ReconError::upstream("spend meter lock poisoned").with_provider(Provider::Cerebras)
+            ReceiptsError::upstream("spend meter lock poisoned").with_provider(Provider::Cerebras)
         })?;
 
         spend.prompt_tokens += usage.prompt_tokens;
@@ -264,9 +268,9 @@ fn is_stripped_control(ch: char) -> bool {
     matches!(ch as u32, 0x00..=0x08 | 0x0B | 0x0C | 0x0E..=0x1F)
 }
 
-fn parse_chat_response(raw: &str) -> Result<ChatResponse, ReconError> {
+fn parse_chat_response(raw: &str) -> Result<ChatResponse, ReceiptsError> {
     let response: RawChatResponse = serde_json::from_str(raw).map_err(|err| {
-        ReconError::upstream(format!("failed to parse Cerebras response JSON: {err}"))
+        ReceiptsError::upstream(format!("failed to parse Cerebras response JSON: {err}"))
             .with_provider(Provider::Cerebras)
             .with_retryable(false)
     })?;

@@ -1,4 +1,4 @@
-use crate::error::ReconError;
+use crate::error::ReceiptsError;
 use crate::pipeline::{ResearchData, StageContext, Verdict};
 use crate::providers::cerebras::{ChatOpts, Message};
 use crate::tiers::WORKER_ROUND_WORST_CASE_COST;
@@ -11,7 +11,7 @@ use crate::tiers::WORKER_ROUND_WORST_CASE_COST;
 pub(crate) fn synthesize_brief(
     data: &ResearchData,
     ctx: &StageContext<'_>,
-) -> Result<Option<String>, ReconError> {
+) -> Result<Option<String>, ReceiptsError> {
     let claims = data
         .claims
         .iter()

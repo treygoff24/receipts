@@ -1,3 +1,3 @@
 fn main() {
-    std::process::exit(recon::commands::run());
+    std::process::exit(receipts::commands::run());
 }

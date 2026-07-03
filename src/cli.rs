@@ -218,14 +218,14 @@ mod tests {
 
     #[test]
     fn quoted_question_defaults_to_ask() {
-        let args = args_with_default_ask(os(&["recon", "what is x?"]));
+        let args = args_with_default_ask(os(&["receipts", "what is x?"]));
         let cli = Cli::try_parse_from(args).unwrap();
         assert!(matches!(cli.command, Commands::Ask(_)));
     }
 
     #[test]
     fn global_flags_before_default_question_are_preserved() {
-        let args = args_with_default_ask(os(&["recon", "--json", "--depth", "quick", "what?"]));
+        let args = args_with_default_ask(os(&["receipts", "--json", "--depth", "quick", "what?"]));
         let cli = Cli::try_parse_from(args).unwrap();
         assert!(cli.global.json);
         assert_eq!(cli.global.depth, DepthArg::Quick);
@@ -234,7 +234,7 @@ mod tests {
 
     #[test]
     fn command_typos_are_left_for_clap_suggestions() {
-        let args = args_with_default_ask(os(&["recon", "capabilties"]));
+        let args = args_with_default_ask(os(&["receipts", "capabilties"]));
         let err = Cli::try_parse_from(args).unwrap_err();
         assert_eq!(err.kind(), clap::error::ErrorKind::InvalidSubcommand);
     }

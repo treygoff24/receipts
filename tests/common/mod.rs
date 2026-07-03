@@ -152,7 +152,7 @@ fn chat_response(body: &str) -> (u16, Value) {
             "content":"",
             "tool_calls":[{
                 "id":"call_search",
-                "function":{"name":"search","arguments":"{\"query\":\"mock recon source\"}"}
+                "function":{"name":"search","arguments":"{\"query\":\"mock receipts source\"}"}
             }]
         }),
         _ => json!({"content":"ok"}),

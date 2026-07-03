@@ -7,31 +7,31 @@ use crate::config::{
     EXA_SEARCH_TYPES,
 };
 use crate::envelope::{Budget, CostDollars, Diagnostics, SuccessEnvelope};
-use crate::error::ReconError;
+use crate::error::ReceiptsError;
 use crate::tiers::{
     CONTENTS_WORST_CASE_COST, DECOMPOSE_WORST_CASE_COST, EXTRACT_WORST_CASE_COST,
     VERIFICATION_WORST_CASE_COST, WORKER_ROUND_WORST_CASE_COST,
 };
 
-pub fn run(_global: &GlobalArgs) -> Result<CommandSuccess, ReconError> {
+pub fn run(_global: &GlobalArgs) -> Result<CommandSuccess, ReceiptsError> {
     let data = json!({
-        "name": "recon",
+        "name": "receipts",
         "version": env!("CARGO_PKG_VERSION"),
-        "schema": "recon.cli.capabilities.v1",
+        "schema": "receipts.cli.capabilities.v1",
         "commands": [
             {
                 "name": "ask",
-                "usage": "recon ask <QUESTION>",
+                "usage": "receipts ask <QUESTION>",
                 "defaultSubcommand": true,
                 "readOnly": true,
                 "destructive": false,
                 "spendsMoney": true,
-                "stdout": "recon.cli.response.v1",
-                "stderrOnError": "recon.cli.error.v1"
+                "stdout": "receipts.cli.response.v1",
+                "stderrOnError": "receipts.cli.error.v1"
             },
             {
                 "name": "doctor",
-                "usage": "recon doctor [--online]",
+                "usage": "receipts doctor [--online]",
                 "readOnly": true,
                 "destructive": false,
                 "spendsMoney": true,
@@ -39,14 +39,14 @@ pub fn run(_global: &GlobalArgs) -> Result<CommandSuccess, ReconError> {
             },
             {
                 "name": "capabilities",
-                "usage": "recon capabilities",
+                "usage": "receipts capabilities",
                 "readOnly": true,
                 "destructive": false,
                 "spendsMoney": false
             },
             {
                 "name": "schema",
-                "usage": "recon schema [response|error|all]",
+                "usage": "receipts schema [response|error|all]",
                 "readOnly": true,
                 "destructive": false,
                 "spendsMoney": false
@@ -76,11 +76,11 @@ pub fn run(_global: &GlobalArgs) -> Result<CommandSuccess, ReconError> {
         "envVars": [
             {"name": "CEREBRAS_API_KEY", "requiredFor": ["ask", "doctor --online"], "secret": true},
             {"name": "EXA_API_KEY", "requiredFor": ["ask", "doctor --online"], "secret": true},
-            {"name": "RECON_MODEL", "default": DEFAULT_MODEL},
-            {"name": "RECON_API_BASE", "default": DEFAULT_API_BASE},
-            {"name": "RECON_EXA_BASE", "default": "https://api.exa.ai"},
-            {"name": "RECON_EXA_SEARCH_TYPE", "default": DEFAULT_EXA_SEARCH_TYPE, "allowed": EXA_SEARCH_TYPES},
-            {"name": "RECON_MAX_CONCURRENCY", "default": DEFAULT_MAX_CONCURRENCY}
+            {"name": "RECEIPTS_MODEL", "default": DEFAULT_MODEL},
+            {"name": "RECEIPTS_API_BASE", "default": DEFAULT_API_BASE},
+            {"name": "RECEIPTS_EXA_BASE", "default": "https://api.exa.ai"},
+            {"name": "RECEIPTS_EXA_SEARCH_TYPE", "default": DEFAULT_EXA_SEARCH_TYPE, "allowed": EXA_SEARCH_TYPES},
+            {"name": "RECEIPTS_MAX_CONCURRENCY", "default": DEFAULT_MAX_CONCURRENCY}
         ],
         "tiers": [
             {"name": "quick", "workers": 2, "latencyExpectation": "~10s target", "costExpectation": "~$0.05-$0.10 typical", "notes": "two same-question workers with complementary search angles"},
@@ -95,9 +95,9 @@ pub fn run(_global: &GlobalArgs) -> Result<CommandSuccess, ReconError> {
             "contents": CONTENTS_WORST_CASE_COST
         },
         "schemas": {
-            "response": "recon schema response",
-            "error": "recon schema error",
-            "all": "recon schema all"
+            "response": "receipts schema response",
+            "error": "receipts schema error",
+            "all": "receipts schema all"
         }
     });
 

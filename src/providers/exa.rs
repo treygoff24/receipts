@@ -3,7 +3,7 @@ use std::sync::Arc;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::error::{Provider, ReconError};
+use crate::error::{Provider, ReceiptsError};
 use crate::providers::{
     HttpFailure, SharedSpend, SleepFn, USER_AGENT, default_sleep, http_agent, join_url, new_spend,
     run_with_retries,
@@ -12,8 +12,8 @@ use crate::providers::{
 pub const DEFAULT_BASE_URL: &str = "https://api.exa.ai";
 
 pub trait SearchProvider: Send + Sync {
-    fn search(&self, query: &str) -> Result<Vec<SourceDoc>, ReconError>;
-    fn contents(&self, url: &str) -> Result<Option<String>, ReconError>;
+    fn search(&self, query: &str) -> Result<Vec<SourceDoc>, ReceiptsError>;
+    fn contents(&self, url: &str) -> Result<Option<String>, ReceiptsError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -74,9 +74,9 @@ impl ExaClient {
     /// Minimal probe for `doctor --online`: POST /search with numResults 1 and
     /// no `contents.text`, so the call is unbilled/cheapest. Keeps spend
     /// metering on whatever Exa reports.
-    pub fn probe(&self) -> Result<(), ReconError> {
+    pub fn probe(&self) -> Result<(), ReceiptsError> {
         let body = json!({
-            "query": "recon doctor probe",
+            "query": "receipts doctor probe",
             "numResults": 1,
         });
         let (raw, retries) = run_with_retries(
@@ -85,7 +85,7 @@ impl ExaClient {
             self.sleep_fn.as_ref(),
         )?;
         let response: RawExaResponse = serde_json::from_str(&raw).map_err(|err| {
-            ReconError::upstream(format!("failed to parse Exa probe JSON: {err}"))
+            ReceiptsError::upstream(format!("failed to parse Exa probe JSON: {err}"))
                 .with_provider(Provider::Exa)
                 .with_retryable(false)
         })?;
@@ -109,9 +109,9 @@ impl ExaClient {
             .map_err(|err| HttpFailure::Transport(err.to_string()))
     }
 
-    fn record_search_spend(&self, dollars: f64, retries: u32) -> Result<(), ReconError> {
+    fn record_search_spend(&self, dollars: f64, retries: u32) -> Result<(), ReceiptsError> {
         let mut spend = self.spend.lock().map_err(|_| {
-            ReconError::upstream("spend meter lock poisoned").with_provider(Provider::Exa)
+            ReceiptsError::upstream("spend meter lock poisoned").with_provider(Provider::Exa)
         })?;
 
         spend.search_dollars += dollars;
@@ -122,7 +122,7 @@ impl ExaClient {
 }
 
 impl SearchProvider for ExaClient {
-    fn search(&self, query: &str) -> Result<Vec<SourceDoc>, ReconError> {
+    fn search(&self, query: &str) -> Result<Vec<SourceDoc>, ReceiptsError> {
         let body = json!({
             "query": query,
             "type": self.search_type,
@@ -135,7 +135,7 @@ impl SearchProvider for ExaClient {
             self.sleep_fn.as_ref(),
         )?;
         let response: RawExaResponse = serde_json::from_str(&raw).map_err(|err| {
-            ReconError::upstream(format!("failed to parse Exa search JSON: {err}"))
+            ReceiptsError::upstream(format!("failed to parse Exa search JSON: {err}"))
                 .with_provider(Provider::Exa)
                 .with_retryable(false)
         })?;
@@ -144,7 +144,7 @@ impl SearchProvider for ExaClient {
         Ok(response.results.into_iter().map(SourceDoc::from).collect())
     }
 
-    fn contents(&self, url: &str) -> Result<Option<String>, ReconError> {
+    fn contents(&self, url: &str) -> Result<Option<String>, ReceiptsError> {
         let body = json!({
             "urls": [url],
             "text": true,
@@ -155,7 +155,7 @@ impl SearchProvider for ExaClient {
             self.sleep_fn.as_ref(),
         )?;
         let response: RawExaResponse = serde_json::from_str(&raw).map_err(|err| {
-            ReconError::upstream(format!("failed to parse Exa contents JSON: {err}"))
+            ReceiptsError::upstream(format!("failed to parse Exa contents JSON: {err}"))
                 .with_provider(Provider::Exa)
                 .with_retryable(false)
         })?;

@@ -1,6 +1,6 @@
-# recon
+# receipts
 
-`recon` is an agent-first Rust CLI for source-verified research. Stdout is reserved for result envelopes. Stderr is reserved for error envelopes. There are no prompts, colors, spinners, or interactive fallbacks.
+`receipts` is an agent-first Rust CLI for source-verified research. Stdout is reserved for result envelopes. Stderr is reserved for error envelopes. There are no prompts, colors, spinners, or interactive fallbacks.
 
 ## Install
 
@@ -14,27 +14,27 @@ cargo install --path .
 | --- | --- | --- |
 | `CEREBRAS_API_KEY` | `ask`, `doctor --online` | none |
 | `EXA_API_KEY` | `ask`, `doctor --online` | none |
-| `RECON_MODEL` | model default | `gemma-4-31b` |
-| `RECON_API_BASE` | Cerebras compatible API base | `https://api.cerebras.ai/v1` |
-| `RECON_EXA_BASE` | Exa compatible API base | `https://api.exa.ai` |
-| `RECON_EXA_SEARCH_TYPE` | Exa search type: `fast`, `instant`, or `auto` | `fast` |
-| `RECON_MAX_CONCURRENCY` | worker concurrency | `25` |
+| `RECEIPTS_MODEL` | model default | `gemma-4-31b` |
+| `RECEIPTS_API_BASE` | Cerebras compatible API base | `https://api.cerebras.ai/v1` |
+| `RECEIPTS_EXA_BASE` | Exa compatible API base | `https://api.exa.ai` |
+| `RECEIPTS_EXA_SEARCH_TYPE` | Exa search type: `fast`, `instant`, or `auto` | `fast` |
+| `RECEIPTS_MAX_CONCURRENCY` | worker concurrency | `25` |
 
 ## Ask
 
 Canonical call:
 
 ```sh
-recon --json --depth quick ask "What source supports this claim?"
+receipts --json --depth quick ask "What source supports this claim?"
 ```
 
-`recon "What source supports this claim?"` is the default-subcommand form for `ask`.
+`receipts "What source supports this claim?"` is the default-subcommand form for `ask`.
 
 Success envelope shape:
 
 ```json
 {
-  "schema": "recon.cli.response.v1",
+  "schema": "receipts.cli.response.v1",
   "ok": true,
   "command": "ask",
   "requestId": "00000000-0000-0000-0000-000000000000",
@@ -91,8 +91,8 @@ Budget caps use pre-launch projection. `--max-dollars X` and `--max-seconds N` s
 ## Doctor
 
 ```sh
-recon doctor --json
-recon doctor --online --json
+receipts doctor --json
+receipts doctor --online --json
 ```
 
 Offline doctor checks config parsing, key presence, resolved model, API bases, depth, verification policy, and concurrency. It never prints secret values. `--online` adds a minimal Cerebras chat probe and an Exa search probe.
@@ -102,10 +102,10 @@ Doctor output is a normal response envelope whose `data` is a structured report 
 ## Self-description
 
 ```sh
-recon capabilities --json
-recon schema all --json
-recon schema response --json
-recon schema error --json
+receipts capabilities --json
+receipts schema all --json
+receipts schema response --json
+receipts schema error --json
 ```
 
 `capabilities` returns version, commands, read-only/destructive/spend annotations, global flags, exit codes, env vars, tier expectations, and budget unit costs. `schema` returns JSON Schema for the success and error envelopes.

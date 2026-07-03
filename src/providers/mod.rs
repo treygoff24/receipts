@@ -1,15 +1,15 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use crate::error::{Provider, ReconError};
+use crate::error::{Provider, ReceiptsError};
 
 pub mod cerebras;
 pub mod exa;
 
 pub const USER_AGENT: &str = concat!(
-    "recon/",
+    "receipts/",
     env!("CARGO_PKG_VERSION"),
-    " (github.com/treygoff/recon)"
+    " (github.com/treygoff/receipts)"
 );
 const MAX_ATTEMPTS: usize = 6;
 
@@ -82,7 +82,7 @@ pub(crate) fn run_with_retries<T>(
     provider: Provider,
     mut send: impl FnMut() -> Result<T, HttpFailure>,
     sleep: &(dyn Fn(Duration) + Send + Sync),
-) -> Result<(T, u32), ReconError> {
+) -> Result<(T, u32), ReceiptsError> {
     let mut retries = 0;
 
     for attempt in 0..MAX_ATTEMPTS {
@@ -98,7 +98,7 @@ pub(crate) fn run_with_retries<T>(
             Err(HttpFailure::Status(status)) => return Err(status_error(provider, status)),
             Err(HttpFailure::Transport(message)) => {
                 if attempt + 1 == MAX_ATTEMPTS {
-                    return Err(ReconError::network(message)
+                    return Err(ReceiptsError::network(message)
                         .with_provider(provider)
                         .with_retryable(true));
                 }
@@ -119,19 +119,19 @@ fn retry_delay(status: u16, attempt: usize) -> Option<Duration> {
     }
 }
 
-fn status_error(provider: Provider, status: u16) -> ReconError {
+fn status_error(provider: Provider, status: u16) -> ReceiptsError {
     let message = format!("{provider} returned HTTP {status}");
     match status {
-        401 | 403 => ReconError::auth(message)
+        401 | 403 => ReceiptsError::auth(message)
             .with_provider(provider)
             .with_retryable(false),
-        429 => ReconError::rate_limit(message)
+        429 => ReceiptsError::rate_limit(message)
             .with_provider(provider)
             .with_retryable(true),
-        500..=599 => ReconError::upstream(message)
+        500..=599 => ReceiptsError::upstream(message)
             .with_provider(provider)
             .with_retryable(true),
-        _ => ReconError::upstream(message)
+        _ => ReceiptsError::upstream(message)
             .with_provider(provider)
             .with_retryable(false),
     }

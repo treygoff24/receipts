@@ -9,7 +9,7 @@ use common::MockServer;
 
 fn temp_home(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!(
-        "recon-{name}-{}",
+        "receipts-{name}-{}",
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -19,17 +19,17 @@ fn temp_home(name: &str) -> PathBuf {
     dir
 }
 
-fn recon_cmd(home: &PathBuf) -> Command {
-    let mut cmd = Command::cargo_bin("recon").unwrap();
+fn receipts_cmd(home: &PathBuf) -> Command {
+    let mut cmd = Command::cargo_bin("receipts").unwrap();
     cmd.env("HOME", home)
         .env_remove("CEREBRAS_API_KEY")
         .env_remove("EXA_API_KEY")
-        .env_remove("RECON_MODEL")
-        .env_remove("RECON_API_BASE")
-        .env_remove("RECON_EXA_BASE")
+        .env_remove("RECEIPTS_MODEL")
+        .env_remove("RECEIPTS_API_BASE")
+        .env_remove("RECEIPTS_EXA_BASE")
         .env_remove("EXA_API_BASE")
-        .env_remove("RECON_EXA_SEARCH_TYPE")
-        .env_remove("RECON_MAX_CONCURRENCY");
+        .env_remove("RECEIPTS_EXA_SEARCH_TYPE")
+        .env_remove("RECEIPTS_MAX_CONCURRENCY");
     cmd
 }
 
@@ -37,11 +37,11 @@ fn recon_cmd(home: &PathBuf) -> Command {
 fn quick_ask_runs_against_mock_server_and_reports_metered_cost() {
     let server = MockServer::start();
     let home = temp_home("quick");
-    let output = recon_cmd(&home)
+    let output = receipts_cmd(&home)
         .env("CEREBRAS_API_KEY", "fake-cerebras")
         .env("EXA_API_KEY", "fake-exa")
-        .env("RECON_API_BASE", server.base_url())
-        .env("RECON_EXA_BASE", server.base_url())
+        .env("RECEIPTS_API_BASE", server.base_url())
+        .env("RECEIPTS_EXA_BASE", server.base_url())
         .arg("--json")
         .arg("--depth")
         .arg("quick")
@@ -58,7 +58,7 @@ fn quick_ask_runs_against_mock_server_and_reports_metered_cost() {
     assert!(output.stderr.is_empty());
     let stdout: Value = serde_json::from_slice(&output.stdout).unwrap();
 
-    assert_eq!(stdout["schema"], "recon.cli.response.v1");
+    assert_eq!(stdout["schema"], "receipts.cli.response.v1");
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "ask");
     assert!(stdout.get("requestId").is_some());
@@ -92,7 +92,7 @@ fn quick_ask_runs_against_mock_server_and_reports_metered_cost() {
 #[test]
 fn unknown_flag_exits_usage_with_suggestion_on_stderr() {
     let home = temp_home("unknown-flag");
-    let output = recon_cmd(&home)
+    let output = receipts_cmd(&home)
         .arg("--jsno")
         .arg("ask")
         .arg("what?")
@@ -102,7 +102,7 @@ fn unknown_flag_exits_usage_with_suggestion_on_stderr() {
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stdout.is_empty());
     let stderr: Value = serde_json::from_slice(&output.stderr).unwrap();
-    assert_eq!(stderr["schema"], "recon.cli.error.v1");
+    assert_eq!(stderr["schema"], "receipts.cli.error.v1");
     assert_eq!(stderr["ok"], false);
     assert_eq!(stderr["error"]["code"], "usage");
     assert!(
@@ -123,9 +123,9 @@ fn unknown_flag_exits_usage_with_suggestion_on_stderr() {
 fn missing_keys_exit_auth_before_any_request() {
     let server = MockServer::start();
     let home = temp_home("missing-keys");
-    let output = recon_cmd(&home)
-        .env("RECON_API_BASE", server.base_url())
-        .env("RECON_EXA_BASE", server.base_url())
+    let output = receipts_cmd(&home)
+        .env("RECEIPTS_API_BASE", server.base_url())
+        .env("RECEIPTS_EXA_BASE", server.base_url())
         .arg("--json")
         .arg("ask")
         .arg("what?")
@@ -156,7 +156,11 @@ fn missing_keys_exit_auth_before_any_request() {
 #[test]
 fn missing_question_exits_no_input() {
     let home = temp_home("missing-question");
-    let output = recon_cmd(&home).arg("--json").arg("ask").output().unwrap();
+    let output = receipts_cmd(&home)
+        .arg("--json")
+        .arg("ask")
+        .output()
+        .unwrap();
 
     assert_eq!(output.status.code(), Some(11));
     assert!(output.stdout.is_empty());
@@ -168,9 +172,9 @@ fn missing_question_exits_no_input() {
 fn dry_run_outputs_estimated_plan_and_makes_zero_requests() {
     let server = MockServer::start();
     let home = temp_home("dry-run");
-    let output = recon_cmd(&home)
-        .env("RECON_API_BASE", server.base_url())
-        .env("RECON_EXA_BASE", server.base_url())
+    let output = receipts_cmd(&home)
+        .env("RECEIPTS_API_BASE", server.base_url())
+        .env("RECEIPTS_EXA_BASE", server.base_url())
         .arg("--json")
         .arg("--dry-run")
         .arg("--depth")
@@ -197,7 +201,7 @@ fn dry_run_outputs_estimated_plan_and_makes_zero_requests() {
 #[test]
 fn help_with_json_emits_success_envelope() {
     let home = temp_home("help-json");
-    let output = recon_cmd(&home)
+    let output = receipts_cmd(&home)
         .arg("--json")
         .arg("--help")
         .output()
@@ -205,7 +209,7 @@ fn help_with_json_emits_success_envelope() {
 
     assert_eq!(output.status.code(), Some(0));
     let stdout: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(stdout["schema"], "recon.cli.response.v1");
+    assert_eq!(stdout["schema"], "receipts.cli.response.v1");
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "help");
     assert!(
@@ -219,7 +223,7 @@ fn help_with_json_emits_success_envelope() {
 #[test]
 fn version_with_json_emits_success_envelope() {
     let home = temp_home("version-json");
-    let output = recon_cmd(&home)
+    let output = receipts_cmd(&home)
         .arg("--json")
         .arg("--version")
         .output()
@@ -227,7 +231,7 @@ fn version_with_json_emits_success_envelope() {
 
     assert_eq!(output.status.code(), Some(0));
     let stdout: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(stdout["schema"], "recon.cli.response.v1");
+    assert_eq!(stdout["schema"], "receipts.cli.response.v1");
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "version");
     assert!(
@@ -242,11 +246,11 @@ fn version_with_json_emits_success_envelope() {
 fn exit_10_partial_on_budget_hit_with_zero_claims() {
     let server = MockServer::start();
     let home = temp_home("exit-10");
-    let output = recon_cmd(&home)
+    let output = receipts_cmd(&home)
         .env("CEREBRAS_API_KEY", "fake-cerebras")
         .env("EXA_API_KEY", "fake-exa")
-        .env("RECON_API_BASE", server.base_url())
-        .env("RECON_EXA_BASE", server.base_url())
+        .env("RECEIPTS_API_BASE", server.base_url())
+        .env("RECEIPTS_EXA_BASE", server.base_url())
         .arg("--json")
         .arg("--depth")
         .arg("quick")
@@ -260,7 +264,7 @@ fn exit_10_partial_on_budget_hit_with_zero_claims() {
     assert_eq!(output.status.code(), Some(10));
     assert!(output.stderr.is_empty());
     let stdout: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(stdout["schema"], "recon.cli.response.v1");
+    assert_eq!(stdout["schema"], "receipts.cli.response.v1");
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["budget"]["hit"], "dollars");
     assert_eq!(stdout["data"]["outcome"], "partial");
@@ -290,7 +294,7 @@ fn dry_run_quick_projection_matches_closed_form_sum() {
     let search = workers * max_rounds * search_call_cost + workers * contents_cost;
     let total = model + search;
 
-    let output = recon_cmd(&home)
+    let output = receipts_cmd(&home)
         .arg("--json")
         .arg("--dry-run")
         .arg("--depth")
@@ -337,7 +341,7 @@ fn dry_run_deep_includes_refinement_pass() {
     let search = workers * max_rounds * search_call_cost + workers * contents_cost;
     let total = model + refinement + search;
 
-    let output = recon_cmd(&home)
+    let output = receipts_cmd(&home)
         .arg("--json")
         .arg("--dry-run")
         .arg("--depth")
@@ -365,11 +369,11 @@ fn dry_run_deep_includes_refinement_pass() {
 fn doctor_online_happy_path_against_mock() {
     let server = MockServer::start();
     let home = temp_home("doctor-online-ok");
-    let output = recon_cmd(&home)
+    let output = receipts_cmd(&home)
         .env("CEREBRAS_API_KEY", "fake-cerebras")
         .env("EXA_API_KEY", "fake-exa")
-        .env("RECON_API_BASE", server.base_url())
-        .env("RECON_EXA_BASE", server.base_url())
+        .env("RECEIPTS_API_BASE", server.base_url())
+        .env("RECEIPTS_EXA_BASE", server.base_url())
         .arg("--json")
         .arg("doctor")
         .arg("--online")
@@ -379,7 +383,7 @@ fn doctor_online_happy_path_against_mock() {
     assert_eq!(output.status.code(), Some(0));
     assert!(output.stderr.is_empty());
     let stdout: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(stdout["schema"], "recon.cli.response.v1");
+    assert_eq!(stdout["schema"], "receipts.cli.response.v1");
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "doctor");
 
@@ -400,11 +404,11 @@ fn doctor_online_happy_path_against_mock() {
 fn doctor_online_bad_exa_key_exits_2() {
     let server = MockServer::start();
     let home = temp_home("doctor-online-bad-exa");
-    let output = recon_cmd(&home)
+    let output = receipts_cmd(&home)
         .env("CEREBRAS_API_KEY", "fake-cerebras")
         .env("EXA_API_KEY", "bad-exa")
-        .env("RECON_API_BASE", server.base_url())
-        .env("RECON_EXA_BASE", server.base_url())
+        .env("RECEIPTS_API_BASE", server.base_url())
+        .env("RECEIPTS_EXA_BASE", server.base_url())
         .arg("--json")
         .arg("doctor")
         .arg("--online")
@@ -414,7 +418,7 @@ fn doctor_online_bad_exa_key_exits_2() {
     assert_eq!(output.status.code(), Some(2));
     assert!(output.stderr.is_empty());
     let stdout: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(stdout["schema"], "recon.cli.response.v1");
+    assert_eq!(stdout["schema"], "receipts.cli.response.v1");
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["command"], "doctor");
 
@@ -434,11 +438,11 @@ fn doctor_online_bad_exa_key_exits_2() {
 fn brief_wired_to_pipeline_synthesis_against_mock() {
     let server = MockServer::start();
     let home = temp_home("brief");
-    let output = recon_cmd(&home)
+    let output = receipts_cmd(&home)
         .env("CEREBRAS_API_KEY", "fake-cerebras")
         .env("EXA_API_KEY", "fake-exa")
-        .env("RECON_API_BASE", server.base_url())
-        .env("RECON_EXA_BASE", server.base_url())
+        .env("RECEIPTS_API_BASE", server.base_url())
+        .env("RECEIPTS_EXA_BASE", server.base_url())
         .arg("--json")
         .arg("--depth")
         .arg("quick")
@@ -455,7 +459,7 @@ fn brief_wired_to_pipeline_synthesis_against_mock() {
     );
     assert!(output.stderr.is_empty());
     let stdout: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(stdout["schema"], "recon.cli.response.v1");
+    assert_eq!(stdout["schema"], "receipts.cli.response.v1");
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["data"]["outcome"], "answered");
     // The brief field should be present (the mock returns "ok" for the

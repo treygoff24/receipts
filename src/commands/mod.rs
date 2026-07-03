@@ -82,7 +82,7 @@ pub fn run() -> i32 {
     }
 }
 
-fn dispatch(cli: Cli) -> Result<CommandSuccess, crate::error::ReconError> {
+fn dispatch(cli: Cli) -> Result<CommandSuccess, crate::error::ReceiptsError> {
     let global = cli.global;
     match cli.command {
         Commands::Ask(args) => ask::run(&global, &args),
@@ -105,9 +105,9 @@ fn emit_parse_error(raw_args: &[std::ffi::OsString], err: clap::Error) -> i32 {
     let message = clean_clap_message(&err.to_string());
     let suggested_fix = suggested_fix(raw_args, &message);
     let command = parse_command_name(raw_args);
-    let recon_err = crate::error::ReconError::usage(format!("usage error: {message}"))
+    let receipts_err = crate::error::ReceiptsError::usage(format!("usage error: {message}"))
         .with_suggested_fix(suggested_fix);
-    let envelope = ErrorEnvelope::from_error(command, &recon_err, None);
+    let envelope = ErrorEnvelope::from_error(command, &receipts_err, None);
     emit_error(&envelope, false)
 }
 
@@ -132,10 +132,10 @@ fn parse_command_name(args: &[std::ffi::OsString]) -> &'static str {
             "doctor" => "doctor",
             "capabilities" => "capabilities",
             "schema" => "schema",
-            _ => "recon",
+            _ => "receipts",
         };
     }
-    "recon"
+    "receipts"
 }
 
 fn suggested_fix(args: &[std::ffi::OsString], message: &str) -> String {
@@ -165,7 +165,7 @@ fn suggested_fix(args: &[std::ffi::OsString], message: &str) -> String {
         return format!("did you mean '{best}'?");
     }
 
-    "Run `recon --help` or `recon capabilities` for the supported contract.".to_string()
+    "Run `receipts --help` or `receipts capabilities` for the supported contract.".to_string()
 }
 
 fn known_flags() -> &'static [&'static str] {

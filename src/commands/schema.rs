@@ -3,9 +3,9 @@ use serde_json::{Value, json};
 use crate::cli::{GlobalArgs, SchemaArgs, SchemaTarget};
 use crate::commands::CommandSuccess;
 use crate::envelope::{Budget, CostDollars, Diagnostics, SuccessEnvelope};
-use crate::error::ReconError;
+use crate::error::ReceiptsError;
 
-pub fn run(_global: &GlobalArgs, args: &SchemaArgs) -> Result<CommandSuccess, ReconError> {
+pub fn run(_global: &GlobalArgs, args: &SchemaArgs) -> Result<CommandSuccess, ReceiptsError> {
     let data = match args.target {
         SchemaTarget::Response => response_schema(),
         SchemaTarget::Error => error_schema(),
@@ -39,11 +39,11 @@ pub fn run(_global: &GlobalArgs, args: &SchemaArgs) -> Result<CommandSuccess, Re
 fn response_schema() -> Value {
     json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": "recon.cli.response.v1",
+        "$id": "receipts.cli.response.v1",
         "type": "object",
         "required": ["schema", "ok", "command", "requestId", "data", "costDollars", "budget", "diagnostics"],
         "properties": {
-            "schema": {"const": "recon.cli.response.v1"},
+            "schema": {"const": "receipts.cli.response.v1"},
             "ok": {"const": true},
             "command": {"enum": ["ask", "doctor", "capabilities", "schema", "help", "version"]},
             "requestId": {"type": "string"},
@@ -193,11 +193,11 @@ fn response_schema() -> Value {
 fn error_schema() -> Value {
     json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": "recon.cli.error.v1",
+        "$id": "receipts.cli.error.v1",
         "type": "object",
         "required": ["schema", "ok", "command", "requestId", "error"],
         "properties": {
-            "schema": {"const": "recon.cli.error.v1"},
+            "schema": {"const": "receipts.cli.error.v1"},
             "ok": {"const": false},
             "command": {"type": "string"},
             "requestId": {"type": "string"},

@@ -9,7 +9,7 @@ use crate::cli::{AskArgs, DepthArg, GlobalArgs, VerifyArg};
 use crate::commands::CommandSuccess;
 use crate::config::Config;
 use crate::envelope::{Budget, CostDollars, Diagnostics, SuccessEnvelope};
-use crate::error::{Provider, ReconError};
+use crate::error::{Provider, ReceiptsError};
 use crate::pipeline::{self, RunParams};
 use crate::providers::cerebras::CerebrasClient;
 use crate::providers::exa::{DEFAULT_BASE_URL as EXA_DEFAULT_BASE_URL, ExaClient};
@@ -19,12 +19,12 @@ use crate::tiers::{
     VERIFICATION_WORST_CASE_COST, WORKER_ROUND_WORST_CASE_COST,
 };
 
-pub fn run(global: &GlobalArgs, args: &AskArgs) -> Result<CommandSuccess, ReconError> {
+pub fn run(global: &GlobalArgs, args: &AskArgs) -> Result<CommandSuccess, ReceiptsError> {
     let question = args.question.join(" ");
     let question = question.trim();
     if question.is_empty() {
-        return Err(ReconError::no_input(
-            "ask requires <QUESTION>; run `recon ask \"what do you need to know?\"`",
+        return Err(ReceiptsError::no_input(
+            "ask requires <QUESTION>; run `receipts ask \"what do you need to know?\"`",
         ));
     }
 
@@ -64,8 +64,9 @@ pub fn run(global: &GlobalArgs, args: &AskArgs) -> Result<CommandSuccess, ReconE
         &search,
         params,
     )?;
-    let mut data_value = to_value(&data)
-        .map_err(|err| ReconError::upstream(format!("failed to serialize research data: {err}")))?;
+    let mut data_value = to_value(&data).map_err(|err| {
+        ReceiptsError::upstream(format!("failed to serialize research data: {err}"))
+    })?;
     if global.brief {
         let brief_params = RunParams::new(
             today_string(),
@@ -120,7 +121,7 @@ pub fn run(global: &GlobalArgs, args: &AskArgs) -> Result<CommandSuccess, ReconE
     })
 }
 
-fn dry_run(global: &GlobalArgs, question: &str) -> Result<CommandSuccess, ReconError> {
+fn dry_run(global: &GlobalArgs, question: &str) -> Result<CommandSuccess, ReceiptsError> {
     let depth: crate::tiers::Depth = global.depth.into();
     let worker_count = match global.depth {
         DepthArg::Quick => 2,
@@ -204,10 +205,10 @@ fn dry_run(global: &GlobalArgs, question: &str) -> Result<CommandSuccess, ReconE
 pub(crate) fn cost_from_spend(
     spend: &SharedSpend,
     estimated: bool,
-) -> Result<CostDollars, ReconError> {
+) -> Result<CostDollars, ReceiptsError> {
     let spend = spend
         .lock()
-        .map_err(|_| ReconError::upstream("spend meter lock poisoned"))?;
+        .map_err(|_| ReceiptsError::upstream("spend meter lock poisoned"))?;
     Ok(CostDollars {
         model: spend.dollars,
         search: spend.search_dollars,
@@ -216,10 +217,10 @@ pub(crate) fn cost_from_spend(
     })
 }
 
-pub(crate) fn retries_from_spend(spend: &SharedSpend) -> Result<u32, ReconError> {
+pub(crate) fn retries_from_spend(spend: &SharedSpend) -> Result<u32, ReceiptsError> {
     let spend = spend
         .lock()
-        .map_err(|_| ReconError::upstream("spend meter lock poisoned"))?;
+        .map_err(|_| ReceiptsError::upstream("spend meter lock poisoned"))?;
     Ok(spend.retries.min(u32::MAX as u64) as u32)
 }
 
@@ -227,22 +228,22 @@ pub(crate) fn require_key(
     key: Option<&str>,
     provider: Provider,
     env_var: &'static str,
-) -> Result<String, ReconError> {
+) -> Result<String, ReceiptsError> {
     key.filter(|value| !value.trim().is_empty())
         .map(ToString::to_string)
         .ok_or_else(|| {
             let suggested_fix = format!(
-                "set {env_var} or add {} to ~/.config/recon/config.toml; verify with: recon doctor",
+                "set {env_var} or add {} to ~/.config/receipts/config.toml; verify with: receipts doctor",
                 env_var.to_lowercase()
             );
-            ReconError::auth(format!("missing {provider} API key; set {env_var}"))
+            ReceiptsError::auth(format!("missing {provider} API key; set {env_var}"))
                 .with_provider(provider)
                 .with_suggested_fix(suggested_fix)
         })
 }
 
 pub(crate) fn exa_base_url() -> String {
-    env::var("RECON_EXA_BASE")
+    env::var("RECEIPTS_EXA_BASE")
         .or_else(|_| env::var("EXA_API_BASE"))
         .unwrap_or_else(|_| EXA_DEFAULT_BASE_URL.to_string())
 }

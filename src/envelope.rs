@@ -1,4 +1,4 @@
-//! `recon.cli.response.v1` (stdout, success) and `recon.cli.error.v1`
+//! `receipts.cli.response.v1` (stdout, success) and `receipts.cli.error.v1`
 //! (stderr, failure) envelopes. On failure stdout stays empty — the whole
 //! result travels in the error envelope on stderr.
 
@@ -7,7 +7,7 @@ use std::io::{self, IsTerminal, Write};
 use serde::Serialize;
 use uuid::Uuid;
 
-use crate::error::ReconError;
+use crate::error::ReceiptsError;
 
 fn new_request_id(request_id: Option<String>) -> String {
     request_id.unwrap_or_else(|| Uuid::new_v4().to_string())
@@ -58,7 +58,7 @@ impl SuccessEnvelope {
         request_id: Option<String>,
     ) -> Self {
         Self {
-            schema: "recon.cli.response.v1".to_string(),
+            schema: "receipts.cli.response.v1".to_string(),
             ok: true,
             command: command.into(),
             request_id: new_request_id(request_id),
@@ -93,7 +93,7 @@ pub struct ErrorEnvelope {
     /// The process exit code for this error. Not part of the JSON contract
     /// (the consumer reads the process exit status, not this payload) — kept
     /// on the envelope so `emit_error` can return it without re-deriving it
-    /// from `ReconError` a second time.
+    /// from `ReceiptsError` a second time.
     #[serde(skip)]
     pub exit_code: i32,
 }
@@ -101,11 +101,11 @@ pub struct ErrorEnvelope {
 impl ErrorEnvelope {
     pub fn from_error(
         command: impl Into<String>,
-        err: &ReconError,
+        err: &ReceiptsError,
         request_id: Option<String>,
     ) -> Self {
         Self {
-            schema: "recon.cli.error.v1".to_string(),
+            schema: "receipts.cli.error.v1".to_string(),
             ok: false,
             command: command.into(),
             request_id: new_request_id(request_id),
@@ -157,7 +157,10 @@ pub fn emit_error(env: &ErrorEnvelope, force_json: bool) -> i32 {
 }
 
 fn render_success_human(env: &SuccessEnvelope) {
-    println!("recon {} — ok (requestId {})", env.command, env.request_id);
+    println!(
+        "receipts {} — ok (requestId {})",
+        env.command, env.request_id
+    );
     println!(
         "cost: ${:.4} (model ${:.4} + search ${:.4}){}",
         env.cost_dollars.total,
@@ -184,7 +187,7 @@ fn render_success_human(env: &SuccessEnvelope) {
 
 fn render_error_human(env: &ErrorEnvelope) {
     eprintln!(
-        "recon {} — error [{}] (requestId {})",
+        "receipts {} — error [{}] (requestId {})",
         env.command, env.error.code, env.request_id
     );
     eprintln!("{}", env.error.message);
@@ -228,7 +231,7 @@ mod tests {
 
         let json = serde_json::to_value(&env).unwrap();
 
-        assert_eq!(json["schema"], "recon.cli.response.v1");
+        assert_eq!(json["schema"], "receipts.cli.response.v1");
         assert_eq!(json["ok"], true);
         assert_eq!(json["command"], "ask");
         assert_eq!(json["requestId"], FIXED_REQUEST_ID);
@@ -249,7 +252,7 @@ mod tests {
 
     #[test]
     fn golden_error_envelope_has_exact_camel_case_fields() {
-        let err = ReconError::rate_limit("Cerebras returned 429")
+        let err = ReceiptsError::rate_limit("Cerebras returned 429")
             .with_provider(Provider::Cerebras)
             .with_retryable(true)
             .with_partial(serde_json::json!({"claims": []}))
@@ -258,7 +261,7 @@ mod tests {
         let env = ErrorEnvelope::from_error("ask", &err, Some(FIXED_REQUEST_ID.to_string()));
         let json = serde_json::to_value(&env).unwrap();
 
-        assert_eq!(json["schema"], "recon.cli.error.v1");
+        assert_eq!(json["schema"], "receipts.cli.error.v1");
         assert_eq!(json["ok"], false);
         assert_eq!(json["command"], "ask");
         assert_eq!(json["requestId"], FIXED_REQUEST_ID);
@@ -286,7 +289,7 @@ mod tests {
 
     #[test]
     fn error_envelope_without_provider_or_partial_omits_neither_field() {
-        let err = ReconError::usage("unknown flag --frobnicate");
+        let err = ReceiptsError::usage("unknown flag --frobnicate");
         let env = ErrorEnvelope::from_error("ask", &err, Some(FIXED_REQUEST_ID.to_string()));
         let json = serde_json::to_value(&env).unwrap();
 

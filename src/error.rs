@@ -1,6 +1,6 @@
-//! `ReconError`: the one error type for the whole crate, carrying enough
+//! `ReceiptsError`: the one error type for the whole crate, carrying enough
 //! context (provider, retryability, partial pipeline output) to populate the
-//! `recon.cli.error.v1` envelope (see `envelope.rs`) without re-deriving it.
+//! `receipts.cli.error.v1` envelope (see `envelope.rs`) without re-deriving it.
 
 use serde_json::Value;
 
@@ -37,7 +37,7 @@ pub struct ErrorContext {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum ReconError {
+pub enum ReceiptsError {
     #[error("usage error: {message}")]
     Usage {
         message: String,
@@ -95,7 +95,7 @@ pub enum ReconError {
 macro_rules! constructor {
     ($name:ident, $variant:ident) => {
         pub fn $name(message: impl Into<String>) -> Self {
-            ReconError::$variant {
+            ReceiptsError::$variant {
                 message: message.into(),
                 context: ErrorContext::default(),
             }
@@ -103,7 +103,7 @@ macro_rules! constructor {
     };
 }
 
-impl ReconError {
+impl ReceiptsError {
     constructor!(usage, Usage);
     constructor!(auth, Auth);
     constructor!(config, Config);
@@ -115,27 +115,27 @@ impl ReconError {
 
     fn context(&self) -> &ErrorContext {
         match self {
-            ReconError::Usage { context, .. }
-            | ReconError::Auth { context, .. }
-            | ReconError::Config { context, .. }
-            | ReconError::Network { context, .. }
-            | ReconError::Upstream { context, .. }
-            | ReconError::RateLimit { context, .. }
-            | ReconError::Partial { context, .. }
-            | ReconError::NoInput { context, .. } => context,
+            ReceiptsError::Usage { context, .. }
+            | ReceiptsError::Auth { context, .. }
+            | ReceiptsError::Config { context, .. }
+            | ReceiptsError::Network { context, .. }
+            | ReceiptsError::Upstream { context, .. }
+            | ReceiptsError::RateLimit { context, .. }
+            | ReceiptsError::Partial { context, .. }
+            | ReceiptsError::NoInput { context, .. } => context,
         }
     }
 
     fn context_mut(&mut self) -> &mut ErrorContext {
         match self {
-            ReconError::Usage { context, .. }
-            | ReconError::Auth { context, .. }
-            | ReconError::Config { context, .. }
-            | ReconError::Network { context, .. }
-            | ReconError::Upstream { context, .. }
-            | ReconError::RateLimit { context, .. }
-            | ReconError::Partial { context, .. }
-            | ReconError::NoInput { context, .. } => context,
+            ReceiptsError::Usage { context, .. }
+            | ReceiptsError::Auth { context, .. }
+            | ReceiptsError::Config { context, .. }
+            | ReceiptsError::Network { context, .. }
+            | ReceiptsError::Upstream { context, .. }
+            | ReceiptsError::RateLimit { context, .. }
+            | ReceiptsError::Partial { context, .. }
+            | ReceiptsError::NoInput { context, .. } => context,
         }
     }
 
@@ -182,28 +182,28 @@ impl ReconError {
     /// Stable exit code for the process, per the CLI contract.
     pub fn exit_code(&self) -> i32 {
         match self {
-            ReconError::Usage { .. } => 1,
-            ReconError::Auth { .. } => 2,
-            ReconError::Config { .. } => 3,
-            ReconError::Network { .. } => 4,
-            ReconError::Upstream { .. } => 5,
-            ReconError::RateLimit { .. } => 6,
-            ReconError::Partial { .. } => 10,
-            ReconError::NoInput { .. } => 11,
+            ReceiptsError::Usage { .. } => 1,
+            ReceiptsError::Auth { .. } => 2,
+            ReceiptsError::Config { .. } => 3,
+            ReceiptsError::Network { .. } => 4,
+            ReceiptsError::Upstream { .. } => 5,
+            ReceiptsError::RateLimit { .. } => 6,
+            ReceiptsError::Partial { .. } => 10,
+            ReceiptsError::NoInput { .. } => 11,
         }
     }
 
     /// Stable snake_case identifier for the error envelope's `error.code`.
     pub fn code(&self) -> &'static str {
         match self {
-            ReconError::Usage { .. } => "usage",
-            ReconError::Auth { .. } => "auth",
-            ReconError::Config { .. } => "config",
-            ReconError::Network { .. } => "network",
-            ReconError::Upstream { .. } => "upstream",
-            ReconError::RateLimit { .. } => "rate_limited",
-            ReconError::Partial { .. } => "partial",
-            ReconError::NoInput { .. } => "no_input",
+            ReceiptsError::Usage { .. } => "usage",
+            ReceiptsError::Auth { .. } => "auth",
+            ReceiptsError::Config { .. } => "config",
+            ReceiptsError::Network { .. } => "network",
+            ReceiptsError::Upstream { .. } => "upstream",
+            ReceiptsError::RateLimit { .. } => "rate_limited",
+            ReceiptsError::Partial { .. } => "partial",
+            ReceiptsError::NoInput { .. } => "no_input",
         }
     }
 
@@ -222,27 +222,27 @@ mod tests {
 
     #[test]
     fn exit_codes_match_contract() {
-        assert_eq!(ReconError::usage("x").exit_code(), 1);
-        assert_eq!(ReconError::auth("x").exit_code(), 2);
-        assert_eq!(ReconError::config("x").exit_code(), 3);
-        assert_eq!(ReconError::network("x").exit_code(), 4);
-        assert_eq!(ReconError::upstream("x").exit_code(), 5);
-        assert_eq!(ReconError::rate_limit("x").exit_code(), 6);
-        assert_eq!(ReconError::partial("x").exit_code(), 10);
-        assert_eq!(ReconError::no_input("x").exit_code(), 11);
+        assert_eq!(ReceiptsError::usage("x").exit_code(), 1);
+        assert_eq!(ReceiptsError::auth("x").exit_code(), 2);
+        assert_eq!(ReceiptsError::config("x").exit_code(), 3);
+        assert_eq!(ReceiptsError::network("x").exit_code(), 4);
+        assert_eq!(ReceiptsError::upstream("x").exit_code(), 5);
+        assert_eq!(ReceiptsError::rate_limit("x").exit_code(), 6);
+        assert_eq!(ReceiptsError::partial("x").exit_code(), 10);
+        assert_eq!(ReceiptsError::no_input("x").exit_code(), 11);
     }
 
     #[test]
     fn codes_are_stable_snake_case() {
-        assert_eq!(ReconError::usage("x").code(), "usage");
-        assert_eq!(ReconError::auth("x").code(), "auth");
-        assert_eq!(ReconError::rate_limit("x").code(), "rate_limited");
-        assert_eq!(ReconError::no_input("x").code(), "no_input");
+        assert_eq!(ReceiptsError::usage("x").code(), "usage");
+        assert_eq!(ReceiptsError::auth("x").code(), "auth");
+        assert_eq!(ReceiptsError::rate_limit("x").code(), "rate_limited");
+        assert_eq!(ReceiptsError::no_input("x").code(), "no_input");
     }
 
     #[test]
     fn builders_set_context() {
-        let err = ReconError::network("timed out")
+        let err = ReceiptsError::network("timed out")
             .with_provider(Provider::Cerebras)
             .with_retryable(true)
             .with_partial(serde_json::json!({"claims": []}));
@@ -255,7 +255,7 @@ mod tests {
 
     #[test]
     fn suggested_fix_builder_sets_context() {
-        let err = ReconError::auth("missing Cerebras API key")
+        let err = ReceiptsError::auth("missing Cerebras API key")
             .with_provider(Provider::Cerebras)
             .with_suggested_fix("set CEREBRAS_API_KEY");
 
@@ -264,7 +264,7 @@ mod tests {
 
     #[test]
     fn default_context_has_no_provider_and_not_retryable() {
-        let err = ReconError::usage("bad flag");
+        let err = ReceiptsError::usage("bad flag");
         assert_eq!(err.provider(), None);
         assert!(!err.is_retryable());
         assert_eq!(err.partial_data(), None);

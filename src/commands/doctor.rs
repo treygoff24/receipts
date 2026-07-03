@@ -11,7 +11,7 @@ use crate::commands::ask::{
 };
 use crate::config::Config;
 use crate::envelope::{Budget, Diagnostics, SuccessEnvelope};
-use crate::error::{Provider, ReconError};
+use crate::error::{Provider, ReceiptsError};
 use crate::providers::cerebras::{CerebrasClient, ChatOpts, Message};
 use crate::providers::exa::ExaClient;
 use crate::providers::new_spend;
@@ -55,7 +55,7 @@ struct Remediation {
     reversible: bool,
 }
 
-pub fn run(global: &GlobalArgs, args: &DoctorArgs) -> Result<CommandSuccess, ReconError> {
+pub fn run(global: &GlobalArgs, args: &DoctorArgs) -> Result<CommandSuccess, ReceiptsError> {
     let started = Instant::now();
     let cfg = Config::load()?;
     let spend = new_spend();
@@ -97,7 +97,7 @@ pub fn run(global: &GlobalArgs, args: &DoctorArgs) -> Result<CommandSuccess, Rec
     let envelope = SuccessEnvelope::new(
         "doctor",
         to_value(report).map_err(|err| {
-            ReconError::upstream(format!("failed to serialize doctor report: {err}"))
+            ReceiptsError::upstream(format!("failed to serialize doctor report: {err}"))
         })?,
         cost_from_spend(&spend, false)?,
         Budget { hit: None },
@@ -111,7 +111,7 @@ pub fn run(global: &GlobalArgs, args: &DoctorArgs) -> Result<CommandSuccess, Rec
     Ok(CommandSuccess {
         envelope,
         exit_code,
-        hint: Some("run `recon doctor --online --json` to probe provider credentials"),
+        hint: Some("run `receipts doctor --online --json` to probe provider credentials"),
     })
 }
 
@@ -184,7 +184,7 @@ fn auth_probe_error(
     id: &'static str,
     provider: Provider,
     env_var: &'static str,
-    err: ReconError,
+    err: ReceiptsError,
 ) -> DoctorCheck {
     DoctorCheck {
         id,
@@ -196,7 +196,7 @@ fn auth_probe_error(
         fix_available: false,
         remediation: Some(Remediation {
             summary: format!(
-                "set a valid {provider} API key; recon doctor --online --json to re-check after fixing the key"
+                "set a valid {provider} API key; receipts doctor --online --json to re-check after fixing the key"
             ),
             command: format!("export {env_var}=..."),
             reversible: false,
