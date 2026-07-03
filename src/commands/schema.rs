@@ -59,12 +59,13 @@ fn response_schema() -> Value {
                             "type": "array",
                             "items": {
                                 "type": "object",
-                                "required": ["claim", "sourceUrl", "quote", "verdict", "note", "published"],
+                                "required": ["claim", "sourceUrl", "quote", "verdict", "relevance", "note", "published"],
                                 "properties": {
                                     "claim": {"type": "string"},
-                                    "sourceUrl": {"type": "string"},
-                                    "quote": {"type": ["string", "null"]},
-                                    "verdict": {"enum": ["supported", "partial", "unsupported", "no_source"]},
+                                    "sourceUrl": {"type": ["string", "null"], "description": "http(s) URL, or null when the source had no usable URL (see note)"},
+                                    "quote": {"type": ["string", "null"], "description": "exact substring of the fetched source text; only present on supported/partial verdicts"},
+                                    "verdict": {"enum": ["supported", "partial", "unsupported", "no_source", "off_topic"]},
+                                    "relevance": {"enum": ["direct", "related", "off_topic"], "description": "relevance-gate result for this claim against the original question: direct answers it, related is useful context but incomplete, off_topic never reached verification"},
                                     "note": {"type": "string"},
                                     "published": {"type": ["string", "null"]}
                                 }

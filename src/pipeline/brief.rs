@@ -21,7 +21,7 @@ pub(crate) fn synthesize_brief(
                 "- [{}] {} ({})",
                 verdict_label(claim.verdict),
                 claim.claim,
-                claim.source_url
+                claim.source_url.as_deref().unwrap_or("no source")
             )
         })
         .collect::<Vec<_>>()
@@ -55,6 +55,7 @@ fn verdict_label(verdict: Verdict) -> &'static str {
         Verdict::Partial => "partial",
         Verdict::Unsupported => "unsupported",
         Verdict::NoSource => "no_source",
+        Verdict::OffTopic => "off_topic",
     }
 }
 
@@ -72,9 +73,10 @@ mod tests {
             outcome: Outcome::Answered,
             claims: vec![crate::pipeline::ResearchClaim {
                 claim: "X is a thing".to_string(),
-                source_url: "https://example.com".to_string(),
+                source_url: Some("https://example.com".to_string()),
                 quote: None,
                 verdict: Verdict::Supported,
+                relevance: crate::pipeline::Relevance::Direct,
                 note: "ok".to_string(),
                 published: None,
             }],

@@ -70,16 +70,23 @@ fn quick_ask_runs_against_mock_server_and_reports_metered_cost() {
         stdout["data"]["claims"][0]["sourceUrl"],
         "https://example.com/source"
     );
+    assert_eq!(
+        stdout["data"]["claims"][0]["quote"],
+        "Mock fact is supported in this source text."
+    );
     assert!(stdout["data"]["searchTrail"].as_array().unwrap().len() >= 2);
 
     // Spend-math derivation: quick tier = 2 workers, each does 1 search tool
     // call then 1 text answer = 2 chat calls per worker (worker round + final
     // answer). But the mock returns a tool_call on the first round, then a text
     // answer on the second, so each worker = 2 chat calls. 2 workers × 2
-    // rounds + 2 extract + 1 verify = 7 chat calls; 2 search calls (one per
-    // worker). Each chat call: 1000 prompt + 1000 completion tokens at
-    // (2.15 + 2.70) / 1M = 0.00485. Each search call: 0.01.
-    let expected_model = 7.0 * 0.00485;
+    // rounds + 2 extract = 6 chat calls; both workers extract the same claim
+    // and url, so dedup collapses it to 1 candidate before the relevance gate
+    // + verify each run once more: +1 relevance + 1 verify = 8 chat calls
+    // total; 2 search calls (one per worker). Each chat call: 1000 prompt +
+    // 1000 completion tokens at (2.15 + 2.70) / 1M = 0.00485. Each search
+    // call: 0.01.
+    let expected_model = 8.0 * 0.00485;
     let expected_search = 2.0 * 0.01;
     let expected_total = expected_model + expected_search;
     assert!((stdout["costDollars"]["model"].as_f64().unwrap() - expected_model).abs() < 1e-12);
@@ -278,28 +285,38 @@ fn dry_run_quick_projection_matches_closed_form_sum() {
     let decompose_cost = 0.001_f64; // DECOMPOSE_WORST_CASE_COST
     let worker_round_cost = 0.03_f64; // WORKER_ROUND_WORST_CASE_COST
     let extract_cost = 0.01_f64; // EXTRACT_WORST_CASE_COST
+    let relevance_cost = 0.001_f64; // RELEVANCE_WORST_CASE_COST
     let verify_cost = 0.002_f64; // VERIFICATION_WORST_CASE_COST
     let contents_cost = 0.005_f64; // CONTENTS_WORST_CASE_COST
     let search_call_cost = 0.01_f64; // SEARCH_CALL_WORST_CASE_COST
+    let max_claims = 15_f64; // MAX_CLAIMS_PER_WORKER
+    let expected_claims = 3_f64; // EXPECTED_CLAIMS_PER_WORKER
 
     let workers = 2_f64;
     let max_rounds = 5_f64; // MAX_ROUNDS
     let decompose_calls = 0_f64; // quick doesn't decompose
     let verify_mult = 1.0_f64; // adaptive
+    let relevance_mult = 1.0_f64; // relevance gate runs whenever verify is enabled
 
+    // Relevance and verify scale off claims-per-worker, not worker count: a
+    // worker's extracted answer can produce up to MAX_CLAIMS_PER_WORKER
+    // claims, each of which pays its own relevance + verify call.
     let model = decompose_calls * decompose_cost
         + workers * max_rounds * worker_round_cost
         + workers * extract_cost
-        + workers * verify_mult * verify_cost;
+        + workers * max_claims * relevance_mult * relevance_cost
+        + workers * max_claims * verify_mult * verify_cost;
     let search = workers * max_rounds * search_call_cost + workers * contents_cost;
     let total = model + search;
 
-    // costDollars carries the expected case: one search round per worker.
+    // costDollars carries the expected case: one search round per worker,
+    // and a smaller documented claims-per-worker assumption.
     let expected_rounds = 1_f64;
     let model_expected = decompose_calls * decompose_cost
         + workers * expected_rounds * worker_round_cost
         + workers * extract_cost
-        + workers * verify_mult * verify_cost;
+        + workers * expected_claims * relevance_mult * relevance_cost
+        + workers * expected_claims * verify_mult * verify_cost;
     let search_expected = workers * expected_rounds * search_call_cost + workers * contents_cost;
     let total_expected = model_expected + search_expected;
 
@@ -339,20 +356,30 @@ fn dry_run_deep_includes_refinement_pass() {
     let decompose_cost = 0.001_f64;
     let worker_round_cost = 0.03_f64;
     let extract_cost = 0.01_f64;
+    let relevance_cost = 0.001_f64;
     let verify_cost = 0.002_f64;
     let contents_cost = 0.005_f64;
     let search_call_cost = 0.01_f64;
+    let max_claims = 15_f64; // MAX_CLAIMS_PER_WORKER
+    let expected_claims = 3_f64; // EXPECTED_CLAIMS_PER_WORKER
 
     let workers = 8_f64;
     let max_rounds = 5_f64;
     let decompose_calls = 1_f64; // deep decomposes
     let verify_mult = 1.0_f64;
+    let relevance_mult = 1.0_f64;
 
     let model = decompose_calls * decompose_cost
         + workers * max_rounds * worker_round_cost
         + workers * extract_cost
-        + workers * verify_mult * verify_cost;
-    let refinement = workers * max_rounds * worker_round_cost;
+        + workers * max_claims * relevance_mult * relevance_cost
+        + workers * max_claims * verify_mult * verify_cost;
+    // Refinement worst case re-runs worker rounds AND a second
+    // extract/relevance/verify pass over the refined claims.
+    let refinement = workers * max_rounds * worker_round_cost
+        + workers * extract_cost
+        + workers * max_claims * relevance_mult * relevance_cost
+        + workers * max_claims * verify_mult * verify_cost;
     let search = workers * max_rounds * search_call_cost + workers * contents_cost;
     let total = model + refinement + search;
 
@@ -384,7 +411,8 @@ fn dry_run_deep_includes_refinement_pass() {
     let model_expected = decompose_calls * decompose_cost
         + workers * expected_rounds * worker_round_cost
         + workers * extract_cost
-        + workers * verify_mult * verify_cost;
+        + workers * expected_claims * relevance_mult * relevance_cost
+        + workers * expected_claims * verify_mult * verify_cost;
     let search_expected = workers * expected_rounds * search_call_cost + workers * contents_cost;
     let total_expected = model_expected + search_expected;
     let expected = stdout["data"]["projectedCost"].as_f64().unwrap();

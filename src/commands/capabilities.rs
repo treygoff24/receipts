@@ -10,7 +10,7 @@ use crate::envelope::{Budget, CostDollars, Diagnostics, SuccessEnvelope};
 use crate::error::ReceiptsError;
 use crate::tiers::{
     CONTENTS_WORST_CASE_COST, DECOMPOSE_WORST_CASE_COST, EXTRACT_WORST_CASE_COST,
-    VERIFICATION_WORST_CASE_COST, WORKER_ROUND_WORST_CASE_COST,
+    RELEVANCE_WORST_CASE_COST, VERIFICATION_WORST_CASE_COST, WORKER_ROUND_WORST_CASE_COST,
 };
 
 pub fn run(_global: &GlobalArgs) -> Result<CommandSuccess, ReceiptsError> {
@@ -91,6 +91,7 @@ pub fn run(_global: &GlobalArgs) -> Result<CommandSuccess, ReceiptsError> {
             "decompose": DECOMPOSE_WORST_CASE_COST,
             "workerRound": WORKER_ROUND_WORST_CASE_COST,
             "extract": EXTRACT_WORST_CASE_COST,
+            "relevance": RELEVANCE_WORST_CASE_COST,
             "verify": VERIFICATION_WORST_CASE_COST,
             "contents": CONTENTS_WORST_CASE_COST
         },

@@ -21,6 +21,19 @@ pub const EXTRACT_WORST_CASE_COST: f64 = 0.01;
 pub const CONTENTS_WORST_CASE_COST: f64 = 0.005;
 /// Measured prototype Exa search call ≈ $0.01 per call (numResults 4 + text).
 pub const SEARCH_CALL_WORST_CASE_COST: f64 = 0.01;
+/// Relevance gate: one small structured-output call per claim candidate,
+/// cheaper than a full verification judge call — small max tokens, no
+/// source-text context.
+pub const RELEVANCE_WORST_CASE_COST: f64 = 0.001;
+/// Hard cap the extraction prompt asks the model for per worker answer (see
+/// `extract::extract_claims`). Both the relevance gate and the verifier run
+/// once per extracted claim, so cost projections must scale off this, not
+/// off worker count — a worker can produce up to this many claims, not one.
+pub const MAX_CLAIMS_PER_WORKER: usize = 15;
+/// Expected-case claim count per worker for cost projection. Worker answers
+/// empirically cite a handful of atomic claims, well under the extraction
+/// cap — this is a documented assumption, not a measured average.
+pub const EXPECTED_CLAIMS_PER_WORKER: usize = 3;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkerTask {

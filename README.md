@@ -29,7 +29,10 @@ receipts "Did the EU AI Act's GPAI obligations take effect in 2025?"
 {
   "schema": "receipts.cli.response.v1",
   "ok": true,
+  "command": "ask",
+  "requestId": "b8e2b6b0-2f7a-4c1e-9b0a-6e6d9f2b6a3c",
   "data": {
+    "question": "Did the EU AI Act's GPAI obligations take effect in 2025?",
     "outcome": "answered",
     "claims": [
       {
@@ -37,16 +40,21 @@ receipts "Did the EU AI Act's GPAI obligations take effect in 2025?"
         "sourceUrl": "https://artificialintelligenceact.eu/implementation-timeline/",
         "quote": "2 August 2025: ... obligations for providers of general-purpose AI models enter into application.",
         "verdict": "supported",
+        "relevance": "direct",
+        "note": "source confirms the 2 August 2025 GPAI obligation date",
         "published": "2025-08-02"
       }
     ],
     "searchTrail": [{ "query": "EU AI Act GPAI obligations effective date", "results": 6 }],
     "uncertainties": []
   },
-  "costDollars": { "total": 0.13, "estimated": false },
-  "diagnostics": { "durationMs": 12100 }
+  "costDollars": { "model": 0.09, "search": 0.04, "total": 0.13, "estimated": false },
+  "budget": { "hit": null },
+  "diagnostics": { "durationMs": 12100, "retries": 0 }
 }
 ```
+
+This is a complete, schema-valid envelope (every field `receipts schema response` requires is present); `receipts capabilities` and `receipts schema` are the generated, authoritative contract if this ever drifts.
 
 Twelve seconds, thirteen cents, and an answer you can cite. That speed comes from Cerebras inference (fast open-weight models) driving Exa search in parallel, with a verification pass that re-reads each source before a claim earns its `supported` verdict.
 
@@ -114,6 +122,10 @@ Budget caps (`--max-dollars`, `--max-seconds`) stop new work, drain in-flight ca
 ## The contract
 
 `receipts --json` forces the machine envelope; without it, a terminal gets the same JSON (there is no separate human renderer yet). Success envelopes are `receipts.cli.response.v1` on stdout; errors are `receipts.cli.error.v1` on stderr with stdout left empty.
+
+Every claim carries a `verdict` (`supported`, `partial`, `unsupported`, `no_source`, `off_topic`) AND a `relevance` (`direct`, `related`, `off_topic`) — two different questions. `verdict` is claim-vs-source: does the cited text actually say this? `relevance` is claim-vs-question, decided by a gate that runs *before* verification: does this claim answer or bear on the question you asked? A claim judged not relevant is marked `verdict: "off_topic"` / `relevance: "off_topic"` and never reaches the (expensive) claim-vs-source check; a claim judged only tangentially relevant is `relevance: "related"` and still gets verified, but can't carry the run on its own. Citable = `verdict: "supported"` AND `relevance: "direct"` AND a non-null `quote` — a `supported` claim that's merely `related` is true but doesn't answer what was asked, so it's a lead, not an answer. `data.outcome` follows the same rule: `answered` requires at least one `supported`+`direct` claim, `partial` covers a budget cap or on-topic claims that never got there (including `supported`-but-`related`), and `unanswered` means nothing on-topic survived. `sourceUrl` is always an http(s) URL or `null`; when a source had no usable URL, its name is preserved in `note` instead.
+
+Court dockets and other login/paywall-gated systems (PACER, for example) are out of reach — `receipts` verifies what secondary, Exa-indexed sources report, not live docket state. A `partial`/`unanswered` outcome on a docket-status question usually means "not indexed," not "nothing happened."
 
 ### Exit codes
 

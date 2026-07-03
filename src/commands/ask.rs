@@ -15,7 +15,8 @@ use crate::providers::cerebras::CerebrasClient;
 use crate::providers::exa::{DEFAULT_BASE_URL as EXA_DEFAULT_BASE_URL, ExaClient};
 use crate::providers::{SharedSpend, new_spend};
 use crate::tiers::{
-    CONTENTS_WORST_CASE_COST, DECOMPOSE_WORST_CASE_COST, EXTRACT_WORST_CASE_COST,
+    CONTENTS_WORST_CASE_COST, DECOMPOSE_WORST_CASE_COST, EXPECTED_CLAIMS_PER_WORKER,
+    EXTRACT_WORST_CASE_COST, MAX_CLAIMS_PER_WORKER, RELEVANCE_WORST_CASE_COST,
     VERIFICATION_WORST_CASE_COST, WORKER_ROUND_WORST_CASE_COST,
 };
 
@@ -134,23 +135,55 @@ fn dry_run(global: &GlobalArgs, question: &str) -> Result<CommandSuccess, Receip
         VerifyArg::Paranoid => 3.0,
         VerifyArg::Off => 0.0,
     };
+    // The relevance gate runs once per claim candidate whenever verification
+    // itself is enabled (it's skipped, same as verify, under `--verify off`).
+    let relevance_multiplier = if global.verify == VerifyArg::Off {
+        0.0
+    } else {
+        1.0
+    };
     let max_rounds = crate::pipeline::worker::MAX_ROUNDS as f64;
     // Workers typically resolve in a single search round (measured on the
     // validated prototype); MAX_ROUNDS only burns when sources keep failing.
     let expected_rounds = 1.0;
 
-    // Model component: decompose + worker rounds + extract + verify.
+    // The relevance gate and verifier each run once PER EXTRACTED CLAIM, not
+    // once per worker — a worker's answer can extract up to
+    // MAX_CLAIMS_PER_WORKER claims (see extract::extract_claims). Worst case
+    // projects the full cap; the expected case uses a documented, smaller
+    // assumption (EXPECTED_CLAIMS_PER_WORKER) since most answers cite only a
+    // handful of atomic claims.
+    let max_claims_per_worker = MAX_CLAIMS_PER_WORKER as f64;
+    let expected_claims_per_worker = EXPECTED_CLAIMS_PER_WORKER as f64;
+
+    // Model component: decompose + worker rounds + extract + relevance + verify.
     let model_projected = decompose_calls as f64 * DECOMPOSE_WORST_CASE_COST
         + worker_count as f64 * max_rounds * WORKER_ROUND_WORST_CASE_COST
         + worker_count as f64 * EXTRACT_WORST_CASE_COST
-        + worker_count as f64 * verification_multiplier * VERIFICATION_WORST_CASE_COST;
+        + worker_count as f64
+            * max_claims_per_worker
+            * relevance_multiplier
+            * RELEVANCE_WORST_CASE_COST
+        + worker_count as f64
+            * max_claims_per_worker
+            * verification_multiplier
+            * VERIFICATION_WORST_CASE_COST;
     let model_expected = decompose_calls as f64 * DECOMPOSE_WORST_CASE_COST
         + worker_count as f64 * expected_rounds * WORKER_ROUND_WORST_CASE_COST
         + worker_count as f64 * EXTRACT_WORST_CASE_COST
-        + worker_count as f64 * verification_multiplier * VERIFICATION_WORST_CASE_COST;
+        + worker_count as f64
+            * expected_claims_per_worker
+            * relevance_multiplier
+            * RELEVANCE_WORST_CASE_COST
+        + worker_count as f64
+            * expected_claims_per_worker
+            * verification_multiplier
+            * VERIFICATION_WORST_CASE_COST;
 
     // Refinement pass (Deep only): worst case all subquestions are dead and
-    // get a second worker round — up to `worker_count` additional units.
+    // get a second worker round, PLUS a second extract/relevance/verify pass
+    // over the refined claims — up to `worker_count` additional units of
+    // each.
     let refinement_note = if global.depth == DepthArg::Deep {
         "worst case incl. refinement"
     } else {
@@ -158,6 +191,15 @@ fn dry_run(global: &GlobalArgs, question: &str) -> Result<CommandSuccess, Receip
     };
     let refinement_projected = if global.depth == DepthArg::Deep {
         worker_count as f64 * max_rounds * WORKER_ROUND_WORST_CASE_COST
+            + worker_count as f64 * EXTRACT_WORST_CASE_COST
+            + worker_count as f64
+                * max_claims_per_worker
+                * relevance_multiplier
+                * RELEVANCE_WORST_CASE_COST
+            + worker_count as f64
+                * max_claims_per_worker
+                * verification_multiplier
+                * VERIFICATION_WORST_CASE_COST
     } else {
         0.0
     };

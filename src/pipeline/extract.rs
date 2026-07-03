@@ -4,8 +4,9 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::pipeline::worker::WorkerAnswer;
-use crate::pipeline::{ChatProvider, ClaimCandidate, ResearchClaim, Verdict, chat_json};
+use crate::pipeline::{ChatProvider, ClaimCandidate, Relevance, ResearchClaim, Verdict, chat_json};
 use crate::providers::cerebras::{ChatOpts, Message};
+use crate::tiers::MAX_CLAIMS_PER_WORKER;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct ExtractedClaim {
@@ -24,7 +25,7 @@ pub fn extract_claims(
     chat: &dyn ChatProvider,
 ) -> Vec<ExtractedClaim> {
     let prompt = format!(
-        "Question: {subquestion}\n\nResearch answer:\n{answer}\n\nExtract the atomic factual claims with their source URLs (only claims that cite a URL). At most 15 claims."
+        "Question: {subquestion}\n\nResearch answer:\n{answer}\n\nExtract the atomic factual claims with their source URLs (only claims that cite a URL). At most {MAX_CLAIMS_PER_WORKER} claims."
     );
     let parsed: Result<ClaimsOutput, _> = chat_json(
         chat,
@@ -48,6 +49,7 @@ pub(crate) fn extract_candidates(
             subquestion: answer.subquestion.clone(),
             claim: claim.claim,
             url: claim.url,
+            relevance: Relevance::Direct,
         })
         .collect()
 }
@@ -72,8 +74,8 @@ pub(crate) fn dedup_candidates(candidates: Vec<ClaimCandidate>) -> Vec<ClaimCand
 /// deep-tier refinement, whose claims are appended AFTER the initial claims —
 /// a refined `supported` duplicate must win over an initial `unsupported`.
 pub(crate) fn dedup_research_claims(claims: Vec<ResearchClaim>) -> Vec<ResearchClaim> {
-    let mut best: HashMap<(String, String), ResearchClaim> = HashMap::new();
-    let mut order: Vec<(String, String)> = Vec::new();
+    let mut best: HashMap<(String, Option<String>), ResearchClaim> = HashMap::new();
+    let mut order: Vec<(String, Option<String>)> = Vec::new();
     for claim in claims {
         if claim.claim.trim().is_empty() {
             continue;
@@ -99,10 +101,11 @@ pub(crate) fn dedup_research_claims(claims: Vec<ResearchClaim>) -> Vec<ResearchC
 
 fn verdict_rank(verdict: &Verdict) -> u8 {
     match verdict {
-        Verdict::Supported => 3,
-        Verdict::Partial => 2,
-        Verdict::Unsupported => 1,
-        Verdict::NoSource => 0,
+        Verdict::Supported => 4,
+        Verdict::Partial => 3,
+        Verdict::Unsupported => 2,
+        Verdict::NoSource => 1,
+        Verdict::OffTopic => 0,
     }
 }
 
@@ -192,16 +195,19 @@ mod tests {
                 subquestion: "q1".to_string(),
                 claim: " A ".to_string(),
                 url: "https://example.com".to_string(),
+                relevance: Relevance::Direct,
             },
             ClaimCandidate {
                 subquestion: "q2".to_string(),
                 claim: "a".to_string(),
                 url: "https://example.com".to_string(),
+                relevance: Relevance::Direct,
             },
             ClaimCandidate {
                 subquestion: "q3".to_string(),
                 claim: "a".to_string(),
                 url: "https://other.com".to_string(),
+                relevance: Relevance::Direct,
             },
         ]);
 
@@ -251,12 +257,26 @@ mod tests {
         assert_eq!(deduped[2].claim, "C happened");
     }
 
+    #[test]
+    fn dedup_research_claims_prefers_verified_over_off_topic_duplicate() {
+        let claims = vec![
+            research_claim("A happened", "https://example.com", Verdict::OffTopic),
+            research_claim("A happened", "https://example.com", Verdict::Unsupported),
+        ];
+
+        let deduped = dedup_research_claims(claims);
+
+        assert_eq!(deduped.len(), 1);
+        assert_eq!(deduped[0].verdict, Verdict::Unsupported);
+    }
+
     fn research_claim(claim: &str, url: &str, verdict: Verdict) -> ResearchClaim {
         ResearchClaim {
             claim: claim.to_string(),
-            source_url: url.to_string(),
+            source_url: Some(url.to_string()),
             quote: None,
             verdict,
+            relevance: Relevance::Direct,
             note: if verdict == Verdict::Supported && claim.starts_with('A') {
                 "first".to_string()
             } else {

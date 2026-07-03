@@ -145,7 +145,10 @@ fn chat_response(body: &str) -> (u16, Value) {
             json!({"content":"{\"claims\":[{\"claim\":\"Mock fact is supported\",\"url\":\"https://example.com/source\"}]}"})
         }
         (Some("verdict"), _, _) => {
-            json!({"content":"{\"verdict\":\"supported\",\"note\":\"mock source text supports the claim\"}"})
+            json!({"content":"{\"verdict\":\"supported\",\"note\":\"mock source text supports the claim\",\"quote\":\"Mock fact is supported in this source text.\"}"})
+        }
+        (Some("relevance"), _, _) => {
+            json!({"content":"{\"relevance\":\"direct\"}"})
         }
         (_, true, _) => json!({"content":"Mock fact is supported by https://example.com/source."}),
         (_, false, true) => json!({

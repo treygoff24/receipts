@@ -84,9 +84,10 @@ pub enum Outcome {
 #[serde(rename_all = "camelCase")]
 pub struct ResearchClaim {
     pub claim: String,
-    pub source_url: String,
+    pub source_url: Option<String>,
     pub quote: Option<String>,
     pub verdict: Verdict,
+    pub relevance: Relevance,
     pub note: String,
     pub published: Option<String>,
 }
@@ -98,12 +99,31 @@ pub enum Verdict {
     Partial,
     Unsupported,
     NoSource,
+    /// The claim did not answer or bear on the original question — caught by
+    /// the relevance gate before the (expensive) claim-vs-source verifier
+    /// ever ran. Kept in the envelope for visibility, never counted toward
+    /// `outcome` or citability.
+    OffTopic,
 }
 
 impl Verdict {
     pub fn is_supported_or_partial(self) -> bool {
         matches!(self, Verdict::Supported | Verdict::Partial)
     }
+}
+
+/// Per-claim relevance-gate outcome, carried alongside `verdict` so a
+/// consumer can tell "supported against its source" apart from "actually
+/// answers the question that was asked." `direct` is the relevance gate's
+/// "yes", `related` is its "partially" (useful context, incomplete), and
+/// `off_topic` mirrors `Verdict::OffTopic` — a claim with that verdict always
+/// carries this relevance too.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Relevance {
+    Direct,
+    Related,
+    OffTopic,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -118,6 +138,12 @@ pub(crate) struct ClaimCandidate {
     pub subquestion: String,
     pub claim: String,
     pub url: String,
+    /// Set by the relevance gate (`Direct` for "yes", `Related` for
+    /// "partially"). Defaults to `Direct` at extraction time and whenever the
+    /// gate itself doesn't run (budget refusal, `--verify off`, unparseable
+    /// model response) — the gate fails open, so an unclassified claim is
+    /// treated as fully on-topic rather than silently downgraded.
+    pub relevance: Relevance,
 }
 
 /// Internal verification result that retains the subquestion attribution from
@@ -208,7 +234,7 @@ pub fn run(
         &mut uncertainties,
     )?;
     let mut candidates = extract_all(&answers, &ctx, &mut uncertainties);
-    let mut verified = verify::verify_candidates(candidates.clone(), verify_policy, &ctx);
+    let mut verified = verify::gate_and_verify(candidates.clone(), question, verify_policy, &ctx);
 
     if depth == Depth::Deep {
         // Derive dead subquestions from the subquestion attribution carried by
@@ -233,13 +259,25 @@ pub fn run(
             let refined = extract_all(&answers[refinement_start..], &ctx, &mut uncertainties);
             let start = candidates.len();
             candidates.extend(refined);
-            let refined_verified =
-                verify::verify_candidates(candidates[start..].to_vec(), verify_policy, &ctx);
+            let refined_verified = verify::gate_and_verify(
+                candidates[start..].to_vec(),
+                question,
+                verify_policy,
+                &ctx,
+            );
             verified.extend(refined_verified);
         }
     }
 
-    let claims = extract::dedup_research_claims(verified.into_iter().map(|vc| vc.claim).collect());
+    // Sanitize sourceUrl BEFORE dedup: two copies of the same claim whose
+    // sourceUrls both sanitize to null (e.g. "PacerMonitor" vs "") must
+    // collide on the same dedup key, not survive as duplicates.
+    let sanitized: Vec<ResearchClaim> = verified
+        .into_iter()
+        .map(|vc| vc.claim)
+        .map(sanitize_claim_source_url)
+        .collect();
+    let claims = extract::dedup_research_claims(sanitized);
     let search_trail = ctx
         .state
         .search_trail
@@ -249,24 +287,8 @@ pub fn run(
     if let Some(hit) = budget.hit() {
         uncertainties.push(format!("budget hit: {hit}"));
     }
-    if !claims
-        .iter()
-        .any(|claim| claim.verdict.is_supported_or_partial())
-        && budget.hit().is_none()
-    {
-        uncertainties.push("no supported or partial claims found".to_string());
-    }
-
-    let outcome = if budget.hit().is_some() {
-        Outcome::Partial
-    } else if claims
-        .iter()
-        .any(|claim| claim.verdict.is_supported_or_partial())
-    {
-        Outcome::Answered
-    } else {
-        Outcome::Unanswered
-    };
+    uncertainties.extend(mechanical_uncertainties(&claims));
+    let outcome = derive_outcome(&claims, budget.hit().is_some());
 
     Ok(ResearchData {
         question: question.to_string(),
@@ -275,6 +297,114 @@ pub fn run(
         search_trail,
         uncertainties,
     })
+}
+
+/// Populates uncertainties mechanically from the final claim set, on top of
+/// whatever the model/pipeline already recorded. Any on-topic claim that
+/// could not be verified names what couldn't be checked; if nothing on-topic
+/// was ever confirmed, one summary line says so — so a run that failed
+/// quietly (no reachable source, off-topic drift) still fails loud.
+fn mechanical_uncertainties(claims: &[ResearchClaim]) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for claim in claims {
+        if claim.verdict == Verdict::NoSource {
+            let entry = format!(
+                "could not verify: {}",
+                truncate_for_uncertainty(&claim.claim)
+            );
+            if seen.insert(entry.clone()) {
+                out.push(entry);
+            }
+        }
+    }
+    let has_supported = claims
+        .iter()
+        .any(|claim| claim.verdict == Verdict::Supported);
+    let has_direct_supported = claims
+        .iter()
+        .any(|claim| claim.verdict == Verdict::Supported && claim.relevance == Relevance::Direct);
+    if !has_supported {
+        out.push("the question could not be verified from reachable sources".to_string());
+    } else if !has_direct_supported {
+        out.push("no supported claim directly answers the question".to_string());
+    }
+    out
+}
+
+/// `answered` requires at least one on-topic `supported` claim that also
+/// directly answers the question (`relevance: direct`) — a `supported`
+/// claim that's merely `related` context isn't enough, the same failure
+/// shape as an off-topic drift, just softer. `off_topic` claims never count
+/// toward outcome, on either side. `partial` covers everything in between: a
+/// budget hit, or on-topic claims that exist but never reached
+/// `supported`+`direct`.
+fn derive_outcome(claims: &[ResearchClaim], budget_hit: bool) -> Outcome {
+    if budget_hit {
+        return Outcome::Partial;
+    }
+    if claims
+        .iter()
+        .any(|claim| claim.verdict == Verdict::Supported && claim.relevance == Relevance::Direct)
+    {
+        return Outcome::Answered;
+    }
+    if claims
+        .iter()
+        .any(|claim| claim.verdict != Verdict::OffTopic)
+    {
+        return Outcome::Partial;
+    }
+    Outcome::Unanswered
+}
+
+fn truncate_for_uncertainty(text: &str) -> String {
+    const LIMIT: usize = 160;
+    let trimmed = text.trim();
+    if trimmed.chars().count() <= LIMIT {
+        trimmed.to_string()
+    } else {
+        format!("{}…", trimmed.chars().take(LIMIT).collect::<String>())
+    }
+}
+
+/// Enforces `sourceUrl` is either a valid http(s) URL or null — the single
+/// chokepoint for F5. Empty strings, malformed strings ("https://not a
+/// url"), and bare source names ("PacerMonitor", "Complaint") all become
+/// null; a non-empty raw value is preserved in `note` so the information
+/// isn't silently dropped.
+fn sanitize_claim_source_url(mut claim: ResearchClaim) -> ResearchClaim {
+    let Some(raw) = claim.source_url.take() else {
+        return claim;
+    };
+    let trimmed = raw.trim();
+    if let Some(clean) = parse_http_url(trimmed) {
+        claim.source_url = Some(clean);
+        return claim;
+    }
+    if !trimmed.is_empty() {
+        let addition = format!("source: {trimmed} (no URL)");
+        claim.note = if claim.note.trim().is_empty() {
+            addition
+        } else {
+            format!("{} | {}", claim.note, addition)
+        };
+    }
+    claim
+}
+
+/// Parses `raw` as an absolute URL, accepting only `http`/`https` with a
+/// host present. Uses the `url` crate rather than a prefix check, since
+/// `"https://not a url"` starts with a valid scheme but isn't a valid URL.
+/// Scheme case is normalized by the crate's parser (`HTTPS://` → `https://`)
+/// before comparison, and the canonical (normalized) form is returned.
+fn parse_http_url(raw: &str) -> Option<String> {
+    let parsed = url::Url::parse(raw).ok()?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return None;
+    }
+    parsed.host_str()?;
+    Some(parsed.to_string())
 }
 
 /// Thin pub wrapper that runs `brief::synthesize_brief` with the same
@@ -709,11 +839,13 @@ mod tests {
                 subquestion: "sub-a".to_string(),
                 claim: "A happened".to_string(),
                 url: "https://a.com".to_string(),
+                relevance: Relevance::Direct,
             },
             ClaimCandidate {
                 subquestion: "sub-b".to_string(),
                 claim: "B happened".to_string(),
                 url: "https://b.com".to_string(),
+                relevance: Relevance::Direct,
             },
         ];
 
@@ -734,5 +866,217 @@ mod tests {
 
         // sub-a is unsupported → dead; sub-b is supported → alive.
         assert_eq!(dead, vec!["sub-a"]);
+    }
+
+    fn claim(verdict: Verdict, source_url: Option<&str>, note: &str) -> ResearchClaim {
+        claim_with_relevance(verdict, Relevance::Direct, source_url, note)
+    }
+
+    fn claim_with_relevance(
+        verdict: Verdict,
+        relevance: Relevance,
+        source_url: Option<&str>,
+        note: &str,
+    ) -> ResearchClaim {
+        ResearchClaim {
+            claim: "a claim".to_string(),
+            source_url: source_url.map(ToString::to_string),
+            quote: None,
+            verdict,
+            relevance,
+            note: note.to_string(),
+            published: None,
+        }
+    }
+
+    #[test]
+    fn mechanical_uncertainties_names_no_source_claims_and_dedups() {
+        let claims = vec![
+            claim(Verdict::NoSource, None, "no source text available"),
+            claim(Verdict::NoSource, None, "no source text available"),
+            claim(Verdict::Unsupported, Some("https://x.com"), "nope"),
+        ];
+
+        let uncertainties = mechanical_uncertainties(&claims);
+
+        assert_eq!(
+            uncertainties,
+            vec![
+                "could not verify: a claim".to_string(),
+                "the question could not be verified from reachable sources".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn mechanical_uncertainties_silent_when_a_claim_is_supported() {
+        let claims = vec![claim(Verdict::Supported, Some("https://x.com"), "yes")];
+
+        assert!(mechanical_uncertainties(&claims).is_empty());
+    }
+
+    #[test]
+    fn mechanical_uncertainties_flags_supported_but_not_direct() {
+        let claims = vec![claim_with_relevance(
+            Verdict::Supported,
+            Relevance::Related,
+            Some("https://x.com"),
+            "yes",
+        )];
+
+        assert_eq!(
+            mechanical_uncertainties(&claims),
+            vec!["no supported claim directly answers the question".to_string()]
+        );
+    }
+
+    #[test]
+    fn derive_outcome_answered_requires_a_supported_claim() {
+        let claims = vec![claim(Verdict::Supported, Some("https://x.com"), "yes")];
+        assert_eq!(derive_outcome(&claims, false), Outcome::Answered);
+    }
+
+    #[test]
+    fn derive_outcome_partial_when_on_topic_but_unverified() {
+        let claims = vec![claim(Verdict::Unsupported, Some("https://x.com"), "no")];
+        assert_eq!(derive_outcome(&claims, false), Outcome::Partial);
+    }
+
+    #[test]
+    fn derive_outcome_unanswered_when_only_off_topic_claims_survive() {
+        let claims = vec![claim_with_relevance(
+            Verdict::OffTopic,
+            Relevance::OffTopic,
+            Some("https://x.com"),
+            "off",
+        )];
+        assert_eq!(derive_outcome(&claims, false), Outcome::Unanswered);
+    }
+
+    #[test]
+    fn derive_outcome_partial_when_supported_but_only_related() {
+        // Codex finding 1: a `supported` claim that's merely `related` (the
+        // relevance gate's "partially") must not on its own make the outcome
+        // `answered` — recreates the dogfood run-2 failure shape for
+        // multi-part questions where a claim is true but doesn't answer what
+        // was asked.
+        let claims = vec![claim_with_relevance(
+            Verdict::Supported,
+            Relevance::Related,
+            Some("https://x.com"),
+            "yes",
+        )];
+        assert_eq!(derive_outcome(&claims, false), Outcome::Partial);
+    }
+
+    #[test]
+    fn derive_outcome_unanswered_when_no_claims_at_all() {
+        assert_eq!(derive_outcome(&[], false), Outcome::Unanswered);
+    }
+
+    #[test]
+    fn derive_outcome_budget_hit_always_wins() {
+        let claims = vec![claim(Verdict::Supported, Some("https://x.com"), "yes")];
+        assert_eq!(derive_outcome(&claims, true), Outcome::Partial);
+    }
+
+    #[test]
+    fn sanitize_claim_source_url_keeps_valid_http_urls() {
+        let sanitized = sanitize_claim_source_url(claim(
+            Verdict::Supported,
+            Some("https://example.com/x"),
+            "ok",
+        ));
+        assert_eq!(
+            sanitized.source_url.as_deref(),
+            Some("https://example.com/x")
+        );
+        assert_eq!(sanitized.note, "ok");
+    }
+
+    #[test]
+    fn sanitize_claim_source_url_nulls_empty_string() {
+        let sanitized = sanitize_claim_source_url(claim(Verdict::NoSource, Some(""), "no source"));
+        assert_eq!(sanitized.source_url, None);
+        assert_eq!(sanitized.note, "no source");
+    }
+
+    #[test]
+    fn sanitize_claim_source_url_moves_bare_name_into_note() {
+        let sanitized =
+            sanitize_claim_source_url(claim(Verdict::NoSource, Some("PacerMonitor"), "no source"));
+        assert_eq!(sanitized.source_url, None);
+        assert_eq!(sanitized.note, "no source | source: PacerMonitor (no URL)");
+    }
+
+    #[test]
+    fn sanitize_claim_source_url_handles_missing_note() {
+        let sanitized = sanitize_claim_source_url(claim(Verdict::NoSource, Some("Complaint"), ""));
+        assert_eq!(sanitized.source_url, None);
+        assert_eq!(sanitized.note, "source: Complaint (no URL)");
+    }
+
+    #[test]
+    fn off_topic_verdict_serializes_to_snake_case() {
+        let value = serde_json::to_value(Verdict::OffTopic).unwrap();
+        assert_eq!(value, serde_json::json!("off_topic"));
+    }
+
+    #[test]
+    fn sanitize_claim_source_url_rejects_scheme_only_url() {
+        let sanitized = sanitize_claim_source_url(claim(Verdict::NoSource, Some("https://"), ""));
+        assert_eq!(sanitized.source_url, None);
+    }
+
+    #[test]
+    fn sanitize_claim_source_url_rejects_malformed_url_with_valid_prefix() {
+        // "https://not a url" starts with a valid scheme but has a space in
+        // the host — the old prefix-check accepted this; url::Url::parse
+        // correctly rejects it.
+        let sanitized =
+            sanitize_claim_source_url(claim(Verdict::NoSource, Some("https://not a url"), ""));
+        assert_eq!(sanitized.source_url, None);
+        assert!(sanitized.note.contains("https://not a url"));
+    }
+
+    #[test]
+    fn sanitize_claim_source_url_normalizes_uppercase_scheme() {
+        let sanitized = sanitize_claim_source_url(claim(
+            Verdict::Supported,
+            Some("HTTPS://Example.com/Path"),
+            "ok",
+        ));
+        assert_eq!(
+            sanitized.source_url.as_deref(),
+            Some("https://example.com/Path")
+        );
+    }
+
+    #[test]
+    fn sanitize_claim_source_url_rejects_control_characters() {
+        let sanitized = sanitize_claim_source_url(claim(
+            Verdict::NoSource,
+            Some("\u{0}\u{1}not a url\u{2}"),
+            "",
+        ));
+        assert_eq!(sanitized.source_url, None);
+    }
+
+    #[test]
+    fn sanitize_before_dedup_collapses_bare_name_duplicates() {
+        // Codex finding 4: two copies of the same claim whose sourceUrls both
+        // sanitize to null must collapse into one via dedup, not survive as
+        // two distinct entries because their *raw* sourceUrls differed.
+        let claims = vec![
+            claim(Verdict::Unsupported, Some("PacerMonitor"), "no"),
+            claim(Verdict::Supported, Some(""), "yes"),
+        ];
+
+        let sanitized: Vec<ResearchClaim> =
+            claims.into_iter().map(sanitize_claim_source_url).collect();
+        let deduped = extract::dedup_research_claims(sanitized);
+
+        assert_eq!(deduped.len(), 1);
+        assert_eq!(deduped[0].verdict, Verdict::Supported);
     }
 }

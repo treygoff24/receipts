@@ -4,9 +4,13 @@ You are probably an AI agent setting this up for a human, or using it yourself. 
 
 ## What this tool does
 
-`receipts` answers a research question with source-verified claims. Input: a question string. Output: a JSON envelope on stdout where every claim has `sourceUrl`, `quote`, and `verdict` fields, plus a `searchTrail` and an `uncertainties` list. It spends real money (typically $0.05–0.31 per question) against Cerebras and Exa APIs. It is non-interactive by design: no prompts, no colors, no spinners. Stdout carries exactly one success envelope; stderr carries exactly one error envelope.
+`receipts` answers a research question with source-verified claims. Input: a question string. Output: a JSON envelope on stdout where every claim has `sourceUrl`, `quote`, `verdict`, and `relevance` fields, plus a `searchTrail` and an `uncertainties` list. It spends real money (typically $0.05–0.31 per question) against Cerebras and Exa APIs. It is non-interactive by design: no prompts, no colors, no spinners. Stdout carries exactly one success envelope; stderr carries exactly one error envelope.
 
 Use it when you need a citable answer, a fact-check with receipts, or ground truth for a claim you're about to put in a document.
+
+There is no synthesized prose answer field by default — `data.claims` is the API, and consumers are expected to read verdicts, not a summary sentence. (`--brief` adds an optional `data.brief` narrative built only from supported/partial claims; treat it as a convenience read, not a citable source.)
+
+Limitation: `receipts` verifies what secondary, Exa-reachable web sources report — news coverage, agency press releases, public dockets that have been indexed. It cannot see behind PACER or other login/paywall-gated systems, so questions about the live status of a specific federal court docket will typically come back `no_source` or `partial`, not because the case is unclear but because the ground truth isn't reachable. Treat `outcome: "partial"` or `"unanswered"` on a docket-status question as "not indexed," not "nothing is happening." (A future CourtListener/RECAP backend could close this gap for federal cases; not built yet.)
 
 A packaged version of this contract ships as an agent skill: `npx skills add treygoff24/receipts` installs it into your skills directory (Claude Code, Codex, Cursor, and friends).
 
@@ -61,13 +65,13 @@ receipts --json --dry-run ask "<q>"                # cost estimate, no keys, no 
 
 Success envelope (`receipts.cli.response.v1`, stdout):
 
-- `data.outcome`: `"answered"` | `"partial"` | `"unanswered"`
-- `data.claims[]`: `claim`, `sourceUrl`, `quote` (nullable), `verdict` (`supported` | `unsupported` | `uncertain`), `note`, `published`
-- `data.uncertainties[]`: things it could not verify — surface these to your human, do not drop them
+- `data.outcome`: `"answered"` (at least one claim with `verdict: "supported"` AND `relevance: "direct"`) | `"partial"` (a budget cap hit, or on-topic claims exist — including `supported`-but-`related` — but none reached `supported`+`direct`) | `"unanswered"` (nothing on-topic survived)
+- `data.claims[]`: `claim`, `sourceUrl` (http(s) URL or `null`), `quote` (nullable), `verdict` (`supported` | `partial` | `unsupported` | `no_source` | `off_topic`), `relevance` (`direct` | `related` | `off_topic`), `note`, `published`
+- `data.uncertainties[]`: things it could not verify, populated both by the model and mechanically (any on-topic claim it couldn't source, a run where nothing was ever confirmed, or supported claims that exist but none are `relevance: "direct"`) — surface these to your human, do not drop them
 - `costDollars.total`: actual spend; `estimated: true` only on dry runs. A dry-run's `costDollars` is the *expected* case (one search round per worker); budget against `data.projectedWorstCaseCost` if you need the hard ceiling
 - `budget.hit`: non-null when a cap stopped work early
 
-Trust rule: treat only `verdict: "supported"` claims with a non-null `quote` as citable. Everything else is a lead, not a fact.
+Two different questions, two different fields. `verdict` is claim-vs-source ("does the cited text say this?"); `relevance` is claim-vs-question ("does this claim answer or bear on what was asked?"), decided by a gate that runs before the (expensive) claim-vs-source check. Trust rule: citable requires ALL THREE — `verdict: "supported"` AND `relevance: "direct"` AND a non-null `quote` — cite via `sourceUrl`. A `supported`+`related` claim is true against its source but doesn't answer the question asked; treat it the same as a lead, not a fact. `verdict: "off_topic"` (always paired with `relevance: "off_topic"`) means the claim didn't bear on the question at all; it's kept in the envelope for visibility, never as a lead. `partial` and `unsupported` verdicts, and `no_source`, are leads, not facts. When `sourceUrl` is `null`, the original source had no usable URL — check `note` for what it was (e.g. a bare source name like "PacerMonitor").
 
 Error envelope (`receipts.cli.error.v1`, stderr): `error.code`, `error.message`, `error.suggestedFix`. Stdout is empty on errors, with one exception below.
 
