@@ -62,7 +62,7 @@ Success envelope (`receipts.cli.response.v1`, stdout):
 - `data.outcome`: `"answered"` | `"partial"` | `"unanswered"`
 - `data.claims[]`: `claim`, `sourceUrl`, `quote` (nullable), `verdict` (`supported` | `unsupported` | `uncertain`), `note`, `published`
 - `data.uncertainties[]`: things it could not verify — surface these to your human, do not drop them
-- `costDollars.total`: actual spend; `estimated: true` only on dry runs
+- `costDollars.total`: actual spend; `estimated: true` only on dry runs. A dry-run's `costDollars` is the *expected* case (one search round per worker); budget against `data.projectedWorstCaseCost` if you need the hard ceiling
 - `budget.hit`: non-null when a cap stopped work early
 
 Trust rule: treat only `verdict: "supported"` claims with a non-null `quote` as citable. Everything else is a lead, not a fact.

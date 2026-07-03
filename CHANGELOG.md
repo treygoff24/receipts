@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.1
+
+- `--dry-run` now reports the expected-case cost in `costDollars` (one search round per worker) instead of the worst case, which overstated typical spend ~6x. The worst-case ceiling remains available as `data.projectedWorstCaseCost`, joined by the new `data.projectedCost`.
+
 ## 0.1.0
 
 Initial release.

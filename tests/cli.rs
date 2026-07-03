@@ -294,6 +294,15 @@ fn dry_run_quick_projection_matches_closed_form_sum() {
     let search = workers * max_rounds * search_call_cost + workers * contents_cost;
     let total = model + search;
 
+    // costDollars carries the expected case: one search round per worker.
+    let expected_rounds = 1_f64;
+    let model_expected = decompose_calls * decompose_cost
+        + workers * expected_rounds * worker_round_cost
+        + workers * extract_cost
+        + workers * verify_mult * verify_cost;
+    let search_expected = workers * expected_rounds * search_call_cost + workers * contents_cost;
+    let total_expected = model_expected + search_expected;
+
     let output = receipts_cmd(&home)
         .arg("--json")
         .arg("--dry-run")
@@ -311,10 +320,16 @@ fn dry_run_quick_projection_matches_closed_form_sum() {
         (projected - total).abs() < 1e-12,
         "projected {projected} != expected {total}"
     );
-    assert!((stdout["costDollars"]["model"].as_f64().unwrap() - model).abs() < 1e-12);
-    assert!((stdout["costDollars"]["search"].as_f64().unwrap() - search).abs() < 1e-12);
-    assert!((stdout["costDollars"]["total"].as_f64().unwrap() - total).abs() < 1e-12);
+    let expected = stdout["data"]["projectedCost"].as_f64().unwrap();
+    assert!(
+        (expected - total_expected).abs() < 1e-12,
+        "projectedCost {expected} != expected {total_expected}"
+    );
+    assert!((stdout["costDollars"]["model"].as_f64().unwrap() - model_expected).abs() < 1e-12);
+    assert!((stdout["costDollars"]["search"].as_f64().unwrap() - search_expected).abs() < 1e-12);
+    assert!((stdout["costDollars"]["total"].as_f64().unwrap() - total_expected).abs() < 1e-12);
     assert!(stdout["costDollars"]["search"].as_f64().unwrap() > 0.0);
+    assert!(expected < total, "expected case must undercut worst case");
 }
 
 #[test]
@@ -362,6 +377,27 @@ fn dry_run_deep_includes_refinement_pass() {
     assert_eq!(
         stdout["data"]["plannedFanout"]["note"],
         "worst case incl. refinement"
+    );
+
+    // Expected case: one round per worker, refinement never fires.
+    let expected_rounds = 1_f64;
+    let model_expected = decompose_calls * decompose_cost
+        + workers * expected_rounds * worker_round_cost
+        + workers * extract_cost
+        + workers * verify_mult * verify_cost;
+    let search_expected = workers * expected_rounds * search_call_cost + workers * contents_cost;
+    let total_expected = model_expected + search_expected;
+    let expected = stdout["data"]["projectedCost"].as_f64().unwrap();
+    assert!(
+        (expected - total_expected).abs() < 1e-12,
+        "projectedCost {expected} != expected {total_expected}"
+    );
+    assert!((stdout["costDollars"]["model"].as_f64().unwrap() - model_expected).abs() < 1e-12);
+    assert!((stdout["costDollars"]["search"].as_f64().unwrap() - search_expected).abs() < 1e-12);
+    assert!((stdout["costDollars"]["total"].as_f64().unwrap() - total_expected).abs() < 1e-12);
+    assert!(
+        expected < projected,
+        "expected case must undercut worst case"
     );
 }
 

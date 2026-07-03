@@ -135,10 +135,17 @@ fn dry_run(global: &GlobalArgs, question: &str) -> Result<CommandSuccess, Receip
         VerifyArg::Off => 0.0,
     };
     let max_rounds = crate::pipeline::worker::MAX_ROUNDS as f64;
+    // Workers typically resolve in a single search round (measured on the
+    // validated prototype); MAX_ROUNDS only burns when sources keep failing.
+    let expected_rounds = 1.0;
 
     // Model component: decompose + worker rounds + extract + verify.
     let model_projected = decompose_calls as f64 * DECOMPOSE_WORST_CASE_COST
         + worker_count as f64 * max_rounds * WORKER_ROUND_WORST_CASE_COST
+        + worker_count as f64 * EXTRACT_WORST_CASE_COST
+        + worker_count as f64 * verification_multiplier * VERIFICATION_WORST_CASE_COST;
+    let model_expected = decompose_calls as f64 * DECOMPOSE_WORST_CASE_COST
+        + worker_count as f64 * expected_rounds * WORKER_ROUND_WORST_CASE_COST
         + worker_count as f64 * EXTRACT_WORST_CASE_COST
         + worker_count as f64 * verification_multiplier * VERIFICATION_WORST_CASE_COST;
 
@@ -161,8 +168,13 @@ fn dry_run(global: &GlobalArgs, question: &str) -> Result<CommandSuccess, Receip
     let search_projected =
         worker_count as f64 * max_rounds * crate::tiers::SEARCH_CALL_WORST_CASE_COST
             + worker_count as f64 * CONTENTS_WORST_CASE_COST;
+    let search_expected =
+        worker_count as f64 * expected_rounds * crate::tiers::SEARCH_CALL_WORST_CASE_COST
+            + worker_count as f64 * CONTENTS_WORST_CASE_COST;
 
     let total_projected = model_projected + refinement_projected + search_projected;
+    // Expected case: single round per worker, no refinement pass fires.
+    let total_expected = model_expected + search_expected;
 
     let data = json!({
         "question": question,
@@ -177,15 +189,16 @@ fn dry_run(global: &GlobalArgs, question: &str) -> Result<CommandSuccess, Receip
             "refinementPass": global.depth == DepthArg::Deep,
             "note": refinement_note
         },
+        "projectedCost": total_expected,
         "projectedWorstCaseCost": total_projected
     });
     let envelope = SuccessEnvelope::new(
         "ask",
         data,
         CostDollars {
-            model: model_projected + refinement_projected,
-            search: search_projected,
-            total: total_projected,
+            model: model_expected,
+            search: search_expected,
+            total: total_expected,
             estimated: true,
         },
         Budget { hit: None },

@@ -85,7 +85,7 @@ fn response_schema() -> Value {
                 {
                     "type": "object",
                     "description": "ask dry-run payload",
-                    "required": ["question", "outcome", "dryRun", "plannedFanout", "projectedWorstCaseCost"],
+                    "required": ["question", "outcome", "dryRun", "plannedFanout", "projectedCost", "projectedWorstCaseCost"],
                     "properties": {
                         "question": {"type": "string"},
                         "outcome": {"enum": ["answered", "partial", "unanswered"]},
@@ -102,6 +102,7 @@ fn response_schema() -> Value {
                                 "note": {"type": "string"}
                             }
                         },
+                        "projectedCost": {"type": "number", "description": "expected-case estimate: one search round per worker, no refinement"},
                         "projectedWorstCaseCost": {"type": "number"}
                     }
                 },
