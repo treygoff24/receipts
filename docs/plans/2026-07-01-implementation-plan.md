@@ -1,5 +1,7 @@
 # recon v1 implementation plan
 
+> **Historical design doc.** Written under the project's original name, `recon`; the repo was later renamed to `receipts` (see `CHANGELOG.md`). Kept for design history — not a description of the current CLI. For current behavior, see `README.md` and `AGENTS.md`.
+
 Design authority: `2026-07-01-recon-cli-design.md` (same dir). This doc maps it to modules, in build order. Prototype evidence lives in the volley repo (`swarm.py`, `LOG.md`).
 
 ## Stack decisions

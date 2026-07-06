@@ -1,5 +1,7 @@
 # Design: `recon` — research at function-call latency
 
+> **Historical design doc.** Written under the project's original name, `recon`; the repo was later renamed to `receipts` (see `CHANGELOG.md`). Kept for design history — not a description of the current CLI. For current behavior, see `README.md` and `AGENTS.md`.
+
 *2026-07-01, from the Session 1 brainstorm (Trey + Fable). Status: draft — two decisions confirmed by Trey (blocking-first exec model; the premise reframe), the rest are Fable's recommendations pending his read. Prototype evidence: `swarm.py` in the volley repo.*
 
 ## What it is
