@@ -9,7 +9,7 @@ pub mod exa;
 pub const USER_AGENT: &str = concat!(
     "receipts/",
     env!("CARGO_PKG_VERSION"),
-    " (github.com/treygoff/receipts)"
+    " (github.com/treygoff24/receipts)"
 );
 const MAX_ATTEMPTS: usize = 6;
 

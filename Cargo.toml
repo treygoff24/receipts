@@ -1,6 +1,6 @@
 [package]
 name = "receipts"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 description = "Source-verified research at function-call latency. Agent-first CLI: every claim comes back with a source URL, quote, and verdict."
 license = "Apache-2.0"

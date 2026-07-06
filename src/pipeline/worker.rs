@@ -240,12 +240,12 @@ mod tests {
     #[test]
     fn tool_round_preserves_message_shapes_cache_and_trail() {
         let chat = ScriptedChat::new(vec![
-            tool_response("call_1", "prospera law", ""),
+            tool_response("call_1", "maritime law", ""),
             text_response("answer https://example.com"),
         ]);
         let search = FakeSearch::default();
         search.search_results.lock().unwrap().insert(
-            "prospera law".to_string(),
+            "maritime law".to_string(),
             vec![SourceDoc {
                 url: "https://example.com".to_string(),
                 title: Some("Example".to_string()),
@@ -296,7 +296,7 @@ mod tests {
         assert_eq!(
             ctx.state.search_trail.lock().unwrap()[0],
             SearchTrailEntry {
-                query: "prospera law".to_string(),
+                query: "maritime law".to_string(),
                 results: 1,
             }
         );

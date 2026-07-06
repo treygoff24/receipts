@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.1
+
+Fixed the outbound User-Agent header pointing at a nonexistent repo path (treygoff → treygoff24) and replaced project-specific test fixture strings with generic placeholders. No behavior changes.
+
 ## 0.2.0
 
 Breaking schema changes, driven by a dogfooding pass that found claims about the wrong subject coming back `supported`, quotes that were never populated, and non-URL strings in `sourceUrl`.

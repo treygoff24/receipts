@@ -214,7 +214,7 @@ mod tests {
     fn golden_success_envelope_has_exact_camel_case_fields() {
         let env = SuccessEnvelope::new(
             "ask",
-            serde_json::json!({"question": "what is prospera", "outcome": "answered"}),
+            serde_json::json!({"question": "what is rust", "outcome": "answered"}),
             CostDollars {
                 model: 0.09,
                 search: 0.04,
