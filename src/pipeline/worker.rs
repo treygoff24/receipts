@@ -63,7 +63,7 @@ pub(crate) fn run_worker(
 
         messages.push(Message::assistant_tool_calls(&response.tool_calls));
         for call in response.tool_calls {
-            let content = run_tool_call(&call, ctx)?;
+            let content = run_tool_call(&call, ctx);
             messages.push(Message::tool(call.id, content));
         }
     }
@@ -75,24 +75,24 @@ pub(crate) fn run_worker(
     })
 }
 
-fn run_tool_call(call: &ToolCall, ctx: &StageContext<'_>) -> Result<String, ReceiptsError> {
+fn run_tool_call(call: &ToolCall, ctx: &StageContext<'_>) -> String {
     if call.function_name != "search" {
-        return Ok(format!("unsupported tool: {}", call.function_name));
+        return format!("unsupported tool: {}", call.function_name);
     }
 
     let query = parse_query(&call.arguments).unwrap_or_default();
     if query.trim().is_empty() {
-        return Ok("missing search query".to_string());
+        return "missing search query".to_string();
     }
 
     match ctx.search.search(&query) {
         Ok(results) => {
-            record_results(&query, &results, ctx)?;
-            Ok(format_results(&results))
+            record_results(&query, &results, ctx);
+            format_results(&results)
         }
         Err(err) => {
-            record_trail(&query, 0, ctx)?;
-            Ok(format!("search failed: {err}"))
+            record_trail(&query, 0, ctx);
+            format!("search failed: {err}")
         }
     }
 }
@@ -108,22 +108,18 @@ fn parse_query(args: &str) -> Option<String> {
         .map(|arguments| arguments.query)
 }
 
-fn record_results(
-    query: &str,
-    results: &[SourceDoc],
-    ctx: &StageContext<'_>,
-) -> Result<(), ReceiptsError> {
-    record_trail(query, results.len(), ctx)?;
+fn record_results(query: &str, results: &[SourceDoc], ctx: &StageContext<'_>) {
+    record_trail(query, results.len(), ctx);
     let mut cache = ctx
         .state
         .source_cache
         .lock()
-        .map_err(|_| ReceiptsError::upstream("source cache lock poisoned"))?;
+        .expect("source cache lock poisoned");
     let mut meta = ctx
         .state
         .source_meta
         .lock()
-        .map_err(|_| ReceiptsError::upstream("source metadata lock poisoned"))?;
+        .expect("source metadata lock poisoned");
     for doc in results {
         cache.insert(doc.url.clone(), doc.text.clone());
         meta.insert(
@@ -133,19 +129,17 @@ fn record_results(
             },
         );
     }
-    Ok(())
 }
 
-fn record_trail(query: &str, results: usize, ctx: &StageContext<'_>) -> Result<(), ReceiptsError> {
+fn record_trail(query: &str, results: usize, ctx: &StageContext<'_>) {
     ctx.state
         .search_trail
         .lock()
-        .map_err(|_| ReceiptsError::upstream("search trail lock poisoned"))?
+        .expect("search trail lock poisoned")
         .push(SearchTrailEntry {
             query: query.to_string(),
             results,
         });
-    Ok(())
 }
 
 pub fn format_results(results: &[SourceDoc]) -> String {

@@ -15,8 +15,7 @@ use crate::tiers::{
 
 use shared::append_note;
 pub use shared::{
-    ChatProvider, Outcome, Relevance, ResearchClaim, ResearchData, RunParams, SearchTrailEntry,
-    SourceCache, Verdict,
+    ChatProvider, Outcome, Relevance, ResearchClaim, ResearchData, RunParams, Verdict,
 };
 pub(crate) use shared::{ClaimCandidate, StageContext, run_chunked};
 pub use verify::VerifyPolicy;
@@ -88,7 +87,7 @@ pub fn run(
         .state
         .search_trail
         .lock()
-        .map_err(|_| ReceiptsError::upstream("search trail lock poisoned"))?
+        .expect("search trail lock poisoned")
         .clone();
     if let Some(hit) = budget.hit() {
         uncertainties.push(format!("budget hit: {hit}"));
@@ -259,34 +258,48 @@ fn limit_or_fallback(mut subquestions: Vec<String>, count: usize, question: &str
     }
 }
 
+fn take_budgeted_batch<T>(
+    iter: &mut impl Iterator<Item = T>,
+    ctx: &StageContext<'_>,
+    projected_cost: f64,
+    uncertainties: &mut Vec<String>,
+    refusal: impl Fn(&T) -> String,
+) -> Vec<T> {
+    let mut batch = Vec::new();
+    while batch.len() < ctx.max_concurrency {
+        let Some(item) = iter.next() else { break };
+        if ctx.may_launch(projected_cost) {
+            batch.push(item);
+        } else {
+            uncertainties.push(refusal(&item));
+            uncertainties.extend(iter.map(|rest| refusal(&rest)));
+            break;
+        }
+    }
+    batch
+}
+
 fn launch_workers(
     tasks: Vec<crate::tiers::WorkerTask>,
     ctx: &StageContext<'_>,
     uncertainties: &mut Vec<String>,
 ) -> Result<Vec<worker::WorkerAnswer>, ReceiptsError> {
     let mut out = Vec::new();
-    let mut iter = tasks.into_iter().peekable();
+    let mut iter = tasks.into_iter();
 
-    while iter.peek().is_some() {
-        let mut batch = Vec::new();
-        while batch.len() < ctx.max_concurrency {
-            let Some(task) = iter.next() else { break };
-            if ctx.may_launch(WORKER_ROUND_WORST_CASE_COST) {
-                batch.push(task);
-            } else {
-                uncertainties.push(format!(
+    loop {
+        let batch = take_budgeted_batch(
+            &mut iter,
+            ctx,
+            WORKER_ROUND_WORST_CASE_COST,
+            uncertainties,
+            |task| {
+                format!(
                     "worker not launched for subquestion {:?}: budget gate refused",
                     task.subquestion
-                ));
-                for rest in iter.by_ref() {
-                    uncertainties.push(format!(
-                        "worker not launched for subquestion {:?}: budget gate refused",
-                        rest.subquestion
-                    ));
-                }
-                break;
-            }
-        }
+                )
+            },
+        );
 
         if batch.is_empty() {
             break;
@@ -320,27 +333,20 @@ fn extract_all(
     uncertainties: &mut Vec<String>,
 ) -> Vec<ClaimCandidate> {
     let mut nested: Vec<Vec<ClaimCandidate>> = Vec::new();
-    let mut iter = answers.iter().peekable();
-    while iter.peek().is_some() {
-        let mut batch: Vec<&worker::WorkerAnswer> = Vec::new();
-        while batch.len() < ctx.max_concurrency {
-            let Some(answer) = iter.next() else { break };
-            if ctx.may_launch(EXTRACT_WORST_CASE_COST) {
-                batch.push(answer);
-            } else {
-                uncertainties.push(format!(
+    let mut iter = answers.iter();
+    loop {
+        let batch = take_budgeted_batch(
+            &mut iter,
+            ctx,
+            EXTRACT_WORST_CASE_COST,
+            uncertainties,
+            |answer| {
+                format!(
                     "extraction not launched for subquestion {:?}: budget gate refused",
                     answer.subquestion
-                ));
-                for rest in iter.by_ref() {
-                    uncertainties.push(format!(
-                        "extraction not launched for subquestion {:?}: budget gate refused",
-                        rest.subquestion
-                    ));
-                }
-                break;
-            }
-        }
+                )
+            },
+        );
 
         if batch.is_empty() {
             break;

@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Provider, ReceiptsError};
@@ -77,10 +75,6 @@ impl ExaClient {
         self
     }
 
-    pub fn spend(&self) -> SharedSpend {
-        Arc::clone(&self.spend)
-    }
-
     /// Minimal probe for `doctor --online`: POST /search with numResults 1 and
     /// no `contents.text`, so the call is unbilled/cheapest. Keeps spend
     /// metering on whatever Exa reports.
@@ -107,7 +101,7 @@ impl ExaClient {
             &std::thread::sleep,
         )?;
         let response = parse_response(&raw, operation)?;
-        self.record_search_spend(response.cost_dollars.total(), retries)?;
+        self.record_search_spend(response.cost_dollars.total(), retries);
         Ok(response)
     }
 
@@ -127,15 +121,12 @@ impl ExaClient {
             .map_err(|err| HttpFailure::Transport(err.to_string()))
     }
 
-    fn record_search_spend(&self, dollars: f64, retries: u32) -> Result<(), ReceiptsError> {
-        let mut spend = self.spend.lock().map_err(|_| {
-            ReceiptsError::upstream("spend meter lock poisoned").with_provider(Provider::Exa)
-        })?;
+    fn record_search_spend(&self, dollars: f64, retries: u32) {
+        let mut spend = self.spend.lock().expect("spend meter lock poisoned");
 
         spend.search_dollars += dollars;
         spend.call_count += 1;
         spend.retries += retries as u64;
-        Ok(())
     }
 }
 
@@ -211,7 +202,7 @@ impl From<RawExaResult> for SourceDoc {
 mod tests {
     use super::*;
     use crate::providers::Spend;
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
 
     #[test]
     fn requests_serialize_exact_wire_shapes() {
@@ -273,7 +264,7 @@ mod tests {
         let client =
             ExaClient::new("key".into(), "http://localhost".into()).with_spend(Arc::clone(&spend));
 
-        client.record_search_spend(0.03, 0).unwrap();
+        client.record_search_spend(0.03, 0);
 
         let spend = spend.lock().unwrap();
         assert_eq!(spend.dollars, 0.0);

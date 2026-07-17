@@ -20,7 +20,7 @@ impl ChatProvider for CerebrasClient {
     }
 }
 
-pub type SourceCache = Arc<Mutex<HashMap<String, String>>>;
+pub(crate) type SourceCache = Arc<Mutex<HashMap<String, String>>>;
 type SourceMetaCache = Arc<Mutex<HashMap<String, SourceMeta>>>;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -51,7 +51,7 @@ impl Default for RunParams {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResearchData {
     pub question: String,
@@ -61,7 +61,7 @@ pub struct ResearchData {
     pub uncertainties: Vec<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Outcome {
     Answered,
@@ -69,7 +69,7 @@ pub enum Outcome {
     Unanswered,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchTrailEntry {
     pub query: String,
@@ -142,7 +142,7 @@ impl<'a> StageContext<'a> {
         }
     }
 
-    pub fn may_launch(&self, projected_unit_cost: f64) -> bool {
+    pub(crate) fn may_launch(&self, projected_unit_cost: f64) -> bool {
         let _gate = self
             .state
             .budget_gate
@@ -162,7 +162,7 @@ where
     let mut out = Vec::new();
     let mut iter = items.into_iter();
     loop {
-        let batch: Vec<_> = iter.by_ref().take(max_concurrency.max(1)).collect();
+        let batch: Vec<_> = iter.by_ref().take(max_concurrency).collect();
         if batch.is_empty() {
             break;
         }

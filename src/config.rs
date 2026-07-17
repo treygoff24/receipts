@@ -73,6 +73,10 @@ fn read_file_config(path: &Path) -> Result<FileConfig, ReceiptsError> {
     })
 }
 
+fn env_over_file(key: &str, file_value: Option<String>) -> Option<String> {
+    env::var(key).ok().or(file_value)
+}
+
 impl Config {
     /// Loads config from `~/.config/receipts/config.toml` (if present) merged
     /// under environment variables, falling back to built-in defaults.
@@ -90,9 +94,7 @@ impl Config {
 
         let defaults = Config::default();
 
-        let exa_search_type = env::var("RECEIPTS_EXA_SEARCH_TYPE")
-            .ok()
-            .or(file_cfg.exa_search_type)
+        let exa_search_type = env_over_file("RECEIPTS_EXA_SEARCH_TYPE", file_cfg.exa_search_type)
             .unwrap_or(defaults.exa_search_type);
         if !EXA_SEARCH_TYPES.contains(&exa_search_type.as_str()) {
             return Err(ReceiptsError::config(format!(
@@ -102,17 +104,10 @@ impl Config {
         }
 
         Ok(Config {
-            cerebras_api_key: env::var("CEREBRAS_API_KEY")
-                .ok()
-                .or(file_cfg.cerebras_api_key),
-            exa_api_key: env::var("EXA_API_KEY").ok().or(file_cfg.exa_api_key),
-            model: env::var("RECEIPTS_MODEL")
-                .ok()
-                .or(file_cfg.model)
-                .unwrap_or(defaults.model),
-            api_base: env::var("RECEIPTS_API_BASE")
-                .ok()
-                .or(file_cfg.api_base)
+            cerebras_api_key: env_over_file("CEREBRAS_API_KEY", file_cfg.cerebras_api_key),
+            exa_api_key: env_over_file("EXA_API_KEY", file_cfg.exa_api_key),
+            model: env_over_file("RECEIPTS_MODEL", file_cfg.model).unwrap_or(defaults.model),
+            api_base: env_over_file("RECEIPTS_API_BASE", file_cfg.api_base)
                 .unwrap_or(defaults.api_base),
             max_concurrency: env::var("RECEIPTS_MAX_CONCURRENCY")
                 .ok()

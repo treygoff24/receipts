@@ -95,11 +95,11 @@ pub fn run(
         0
     };
     let report = report(checks);
-    let retries = retries_from_spend(&spend)?;
+    let retries = retries_from_spend(&spend);
     let envelope = SuccessEnvelope::new(
         "doctor",
         report,
-        cost_from_spend(&spend, false)?,
+        cost_from_spend(&spend, false),
         Budget { hit: None },
         Diagnostics {
             duration_ms: started.elapsed().as_millis() as u64,

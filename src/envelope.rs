@@ -4,7 +4,7 @@
 
 use std::io::{self, IsTerminal};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::error::{PartialData, ReceiptsError};
@@ -13,7 +13,7 @@ fn new_request_id(request_id: Option<String>) -> String {
     request_id.unwrap_or_else(|| Uuid::new_v4().to_string())
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CostDollars {
     pub model: f64,
@@ -22,20 +22,20 @@ pub struct CostDollars {
     pub estimated: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Budget {
     /// "dollars" | "seconds" | null
     pub hit: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Diagnostics {
     pub duration_ms: u64,
     pub retries: u32,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SuccessEnvelope<T> {
     pub schema: String,

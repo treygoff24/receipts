@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
@@ -321,10 +320,6 @@ impl CerebrasClient {
         self
     }
 
-    pub fn spend(&self) -> SharedSpend {
-        Arc::clone(&self.spend)
-    }
-
     pub fn chat(
         &self,
         messages: &[Message],
@@ -340,7 +335,7 @@ impl CerebrasClient {
         )?;
         let mut response = parse_chat_response(&raw)?;
         response.wall_time_ms = start.elapsed().as_millis() as u64;
-        self.record_spend(&response.usage, retries)?;
+        self.record_spend(&response.usage, retries);
         Ok(response)
     }
 
@@ -368,18 +363,15 @@ impl CerebrasClient {
             .map_err(|err| HttpFailure::Transport(err.to_string()))
     }
 
-    fn record_spend(&self, usage: &TokenUsage, retries: u32) -> Result<(), ReceiptsError> {
+    fn record_spend(&self, usage: &TokenUsage, retries: u32) {
         let dollars = model_cost_dollars(&self.model, usage);
-        let mut spend = self.spend.lock().map_err(|_| {
-            ReceiptsError::upstream("spend meter lock poisoned").with_provider(Provider::Cerebras)
-        })?;
+        let mut spend = self.spend.lock().expect("spend meter lock poisoned");
 
         spend.prompt_tokens += usage.prompt_tokens;
         spend.completion_tokens += usage.completion_tokens;
         spend.dollars += dollars;
         spend.call_count += 1;
         spend.retries += retries as u64;
-        Ok(())
     }
 }
 
@@ -506,7 +498,7 @@ struct RawToolCall {
 mod tests {
     use super::*;
     use crate::providers::Spend;
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
 
     #[derive(Deserialize)]
     struct NameOutput {
@@ -641,15 +633,13 @@ mod tests {
         )
         .with_spend(Arc::clone(&spend));
 
-        client
-            .record_spend(
-                &TokenUsage {
-                    prompt_tokens: 1_000_000,
-                    completion_tokens: 1_000_000,
-                },
-                2,
-            )
-            .unwrap();
+        client.record_spend(
+            &TokenUsage {
+                prompt_tokens: 1_000_000,
+                completion_tokens: 1_000_000,
+            },
+            2,
+        );
 
         let spend = spend.lock().unwrap();
         assert_eq!(spend.prompt_tokens, 1_000_000);
@@ -669,15 +659,13 @@ mod tests {
         )
         .with_spend(Arc::clone(&spend));
 
-        client
-            .record_spend(
-                &TokenUsage {
-                    prompt_tokens: 1_000_000,
-                    completion_tokens: 1_000_000,
-                },
-                0,
-            )
-            .unwrap();
+        client.record_spend(
+            &TokenUsage {
+                prompt_tokens: 1_000_000,
+                completion_tokens: 1_000_000,
+            },
+            0,
+        );
 
         let spend = spend.lock().unwrap();
         assert!((spend.dollars - 1.10).abs() < f64::EPSILON);

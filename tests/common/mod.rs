@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-pub struct MockServer {
+pub(crate) struct MockServer {
     base_url: String,
     requests: Arc<AtomicUsize>,
     running: Arc<AtomicBool>,
@@ -15,7 +15,7 @@ pub struct MockServer {
 }
 
 impl MockServer {
-    pub fn start() -> Self {
+    pub(crate) fn start() -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let addr = listener.local_addr().unwrap();
@@ -46,11 +46,11 @@ impl MockServer {
         }
     }
 
-    pub fn base_url(&self) -> &str {
+    pub(crate) fn base_url(&self) -> &str {
         &self.base_url
     }
 
-    pub fn request_count(&self) -> usize {
+    pub(crate) fn request_count(&self) -> usize {
         self.requests.load(Ordering::SeqCst)
     }
 }

@@ -123,8 +123,8 @@ pub fn run(global: &GlobalArgs, args: &AskArgs) -> Result<CommandSuccess<AskData
             }
         }
     }
-    let cost = cost_from_spend(&spend, false)?;
-    let retries = retries_from_spend(&spend)?;
+    let cost = cost_from_spend(&spend, false);
+    let retries = retries_from_spend(&spend);
     let exit_code = if budget.hit().is_some() { 10 } else { 0 };
     let envelope = SuccessEnvelope::new(
         "ask",
@@ -252,26 +252,19 @@ fn dry_run(global: &GlobalArgs, question: &str) -> Result<CommandSuccess<AskData
     })
 }
 
-pub(crate) fn cost_from_spend(
-    spend: &SharedSpend,
-    estimated: bool,
-) -> Result<CostDollars, ReceiptsError> {
-    let spend = spend
-        .lock()
-        .map_err(|_| ReceiptsError::upstream("spend meter lock poisoned"))?;
-    Ok(CostDollars {
+pub(crate) fn cost_from_spend(spend: &SharedSpend, estimated: bool) -> CostDollars {
+    let spend = spend.lock().expect("spend meter lock poisoned");
+    CostDollars {
         model: spend.dollars,
         search: spend.search_dollars,
         total: spend.total_dollars(),
         estimated,
-    })
+    }
 }
 
-pub(crate) fn retries_from_spend(spend: &SharedSpend) -> Result<u32, ReceiptsError> {
-    let spend = spend
-        .lock()
-        .map_err(|_| ReceiptsError::upstream("spend meter lock poisoned"))?;
-    Ok(spend.retries.min(u32::MAX as u64) as u32)
+pub(crate) fn retries_from_spend(spend: &SharedSpend) -> u32 {
+    let spend = spend.lock().expect("spend meter lock poisoned");
+    u32::try_from(spend.retries).expect("retry count exceeds u32")
 }
 
 pub(crate) fn require_key(

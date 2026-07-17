@@ -3,71 +3,18 @@ mod common;
 use std::path::PathBuf;
 
 use assert_cmd::Command;
+use receipts::envelope::SuccessEnvelope;
+use receipts::pipeline::{Outcome, ResearchData, Verdict};
 use serde::Deserialize;
 
 use common::MockServer;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct SuccessEnvelope<T> {
-    schema: String,
-    ok: bool,
-    command: String,
-    request_id: String,
-    data: T,
-    cost_dollars: CostDollars,
-    budget: Budget,
-}
-
-#[derive(Deserialize)]
-struct CostDollars {
-    model: f64,
-    search: f64,
-    total: f64,
-    estimated: bool,
-}
-
-#[derive(Deserialize)]
-struct Budget {
-    hit: Option<String>,
-}
-
-#[derive(Debug, Deserialize, PartialEq)]
-#[serde(rename_all = "snake_case")]
-enum Outcome {
-    Answered,
-    Partial,
-}
-
-#[derive(Debug, Deserialize, PartialEq)]
-#[serde(rename_all = "snake_case")]
-enum Verdict {
-    Supported,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct AskData {
-    outcome: Outcome,
-    claims: Vec<Claim>,
-    search_trail: Vec<SearchTrailEntry>,
+    #[serde(flatten)]
+    research: ResearchData,
     brief: Option<String>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct Claim {
-    source_url: Option<String>,
-    quote: Option<String>,
-    verdict: Verdict,
-}
-
-#[derive(Deserialize)]
-struct SearchTrailEntry {
-    #[serde(rename = "query")]
-    _query: String,
-    #[serde(rename = "results")]
-    _results: usize,
 }
 
 #[derive(Deserialize)]
@@ -153,15 +100,20 @@ fn receipts_cmd(home: &PathBuf) -> Command {
     cmd
 }
 
+fn mock_server_cmd(home: &PathBuf, server: &MockServer) -> Command {
+    let mut cmd = receipts_cmd(home);
+    cmd.env("CEREBRAS_API_KEY", "fake-cerebras")
+        .env("EXA_API_KEY", "fake-exa")
+        .env("RECEIPTS_API_BASE", server.base_url())
+        .env("RECEIPTS_EXA_BASE", server.base_url());
+    cmd
+}
+
 #[test]
 fn quick_ask_runs_against_mock_server_and_reports_metered_cost() {
     let server = MockServer::start();
     let home = temp_home("quick");
-    let output = receipts_cmd(&home)
-        .env("CEREBRAS_API_KEY", "fake-cerebras")
-        .env("EXA_API_KEY", "fake-exa")
-        .env("RECEIPTS_API_BASE", server.base_url())
-        .env("RECEIPTS_EXA_BASE", server.base_url())
+    let output = mock_server_cmd(&home, &server)
         .arg("--json")
         .arg("--depth")
         .arg("quick")
@@ -183,17 +135,17 @@ fn quick_ask_runs_against_mock_server_and_reports_metered_cost() {
     assert_eq!(stdout.command, "ask");
     assert!(!stdout.request_id.is_empty());
     assert!(!String::from_utf8_lossy(&output.stdout).contains("\"cost_dollars\""));
-    assert_eq!(stdout.data.outcome, Outcome::Answered);
-    assert_eq!(stdout.data.claims[0].verdict, Verdict::Supported);
+    assert_eq!(stdout.data.research.outcome, Outcome::Answered);
+    assert_eq!(stdout.data.research.claims[0].verdict, Verdict::Supported);
     assert_eq!(
-        stdout.data.claims[0].source_url.as_deref(),
+        stdout.data.research.claims[0].source_url.as_deref(),
         Some("https://example.com/source")
     );
     assert_eq!(
-        stdout.data.claims[0].quote.as_deref(),
+        stdout.data.research.claims[0].quote.as_deref(),
         Some("Mock fact is supported in this source text.")
     );
-    assert!(stdout.data.search_trail.len() >= 2);
+    assert!(stdout.data.research.search_trail.len() >= 2);
 
     // Dedup leaves one claim, so two workers produce eight billed chat calls:
     // four worker rounds, two extractions, one relevance gate, and one verifier.
@@ -339,11 +291,7 @@ fn version_with_json_emits_success_envelope() {
 fn exit_10_partial_on_budget_hit_with_zero_claims() {
     let server = MockServer::start();
     let home = temp_home("exit-10");
-    let output = receipts_cmd(&home)
-        .env("CEREBRAS_API_KEY", "fake-cerebras")
-        .env("EXA_API_KEY", "fake-exa")
-        .env("RECEIPTS_API_BASE", server.base_url())
-        .env("RECEIPTS_EXA_BASE", server.base_url())
+    let output = mock_server_cmd(&home, &server)
         .arg("--json")
         .arg("--depth")
         .arg("quick")
@@ -360,7 +308,7 @@ fn exit_10_partial_on_budget_hit_with_zero_claims() {
     assert_eq!(stdout.schema, "receipts.cli.response.v1");
     assert!(stdout.ok);
     assert_eq!(stdout.budget.hit.as_deref(), Some("dollars"));
-    assert_eq!(stdout.data.outcome, Outcome::Partial);
+    assert_eq!(stdout.data.research.outcome, Outcome::Partial);
 }
 
 #[test]
@@ -517,11 +465,7 @@ fn dry_run_deep_includes_refinement_pass() {
 fn doctor_online_happy_path_against_mock() {
     let server = MockServer::start();
     let home = temp_home("doctor-online-ok");
-    let output = receipts_cmd(&home)
-        .env("CEREBRAS_API_KEY", "fake-cerebras")
-        .env("EXA_API_KEY", "fake-exa")
-        .env("RECEIPTS_API_BASE", server.base_url())
-        .env("RECEIPTS_EXA_BASE", server.base_url())
+    let output = mock_server_cmd(&home, &server)
         .arg("--json")
         .arg("doctor")
         .arg("--online")
@@ -555,11 +499,8 @@ fn doctor_online_happy_path_against_mock() {
 fn doctor_online_bad_exa_key_exits_2() {
     let server = MockServer::start();
     let home = temp_home("doctor-online-bad-exa");
-    let output = receipts_cmd(&home)
-        .env("CEREBRAS_API_KEY", "fake-cerebras")
+    let output = mock_server_cmd(&home, &server)
         .env("EXA_API_KEY", "bad-exa")
-        .env("RECEIPTS_API_BASE", server.base_url())
-        .env("RECEIPTS_EXA_BASE", server.base_url())
         .arg("--json")
         .arg("doctor")
         .arg("--online")
@@ -590,11 +531,7 @@ fn doctor_online_bad_exa_key_exits_2() {
 fn brief_wired_to_pipeline_synthesis_against_mock() {
     let server = MockServer::start();
     let home = temp_home("brief");
-    let output = receipts_cmd(&home)
-        .env("CEREBRAS_API_KEY", "fake-cerebras")
-        .env("EXA_API_KEY", "fake-exa")
-        .env("RECEIPTS_API_BASE", server.base_url())
-        .env("RECEIPTS_EXA_BASE", server.base_url())
+    let output = mock_server_cmd(&home, &server)
         .arg("--json")
         .arg("--depth")
         .arg("quick")
@@ -613,7 +550,7 @@ fn brief_wired_to_pipeline_synthesis_against_mock() {
     let stdout: SuccessEnvelope<AskData> = stdout(&output);
     assert_eq!(stdout.schema, "receipts.cli.response.v1");
     assert!(stdout.ok);
-    assert_eq!(stdout.data.outcome, Outcome::Answered);
+    assert_eq!(stdout.data.research.outcome, Outcome::Answered);
     assert!(
         stdout.data.brief.is_some_and(|brief| !brief.is_empty()),
         "brief must be present and non-empty"
