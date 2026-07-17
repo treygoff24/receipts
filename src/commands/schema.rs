@@ -2,7 +2,6 @@ use serde_json::{Value, json};
 
 use crate::cli::{GlobalArgs, SchemaArgs, SchemaTarget};
 use crate::commands::CommandSuccess;
-use crate::envelope::{Budget, CostDollars, Diagnostics, SuccessEnvelope};
 use crate::error::ReceiptsError;
 
 pub fn run(_global: &GlobalArgs, args: &SchemaArgs) -> Result<CommandSuccess, ReceiptsError> {
@@ -14,26 +13,7 @@ pub fn run(_global: &GlobalArgs, args: &SchemaArgs) -> Result<CommandSuccess, Re
             "error": error_schema()
         }),
     };
-    Ok(CommandSuccess {
-        envelope: SuccessEnvelope::new(
-            "schema",
-            data,
-            CostDollars {
-                model: 0.0,
-                search: 0.0,
-                total: 0.0,
-                estimated: false,
-            },
-            Budget { hit: None },
-            Diagnostics {
-                duration_ms: 0,
-                retries: 0,
-            },
-            None,
-        ),
-        exit_code: 0,
-        hint: None,
-    })
+    Ok(CommandSuccess::free("schema", data))
 }
 
 fn response_schema() -> Value {

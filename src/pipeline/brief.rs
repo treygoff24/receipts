@@ -1,5 +1,5 @@
 use crate::error::ReceiptsError;
-use crate::pipeline::{ResearchData, StageContext, Verdict};
+use crate::pipeline::shared::{ResearchData, StageContext, Verdict};
 use crate::providers::cerebras::{ChatOpts, Message};
 use crate::tiers::WORKER_ROUND_WORST_CASE_COST;
 
@@ -30,8 +30,7 @@ pub(crate) fn synthesize_brief(
         return Ok(Some(String::new()));
     }
 
-    // Gate the paid synthesis chat call.
-    if !ctx.may_launch(WORKER_ROUND_WORST_CASE_COST)? {
+    if !ctx.may_launch(WORKER_ROUND_WORST_CASE_COST) {
         return Ok(None);
     }
 
@@ -87,7 +86,6 @@ mod tests {
 
     #[test]
     fn budget_refusal_skips_brief_synthesis() {
-        // Finding 7: budget refused → Ok(None), no chat call.
         let chat = ScriptedChat::new(vec![text_response("should not be called")]);
         let search = FakeSearch::default();
         let budget = Budget::new(Some(0.0), None);

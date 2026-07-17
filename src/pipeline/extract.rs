@@ -1,11 +1,12 @@
 use std::collections::{HashMap, HashSet};
 
 use serde::Deserialize;
-use serde_json::json;
 
+use crate::pipeline::shared::{
+    ChatProvider, ClaimCandidate, Relevance, ResearchClaim, Verdict, chat_json,
+};
 use crate::pipeline::worker::WorkerAnswer;
-use crate::pipeline::{ChatProvider, ClaimCandidate, Relevance, ResearchClaim, Verdict, chat_json};
-use crate::providers::cerebras::{ChatOpts, Message};
+use crate::providers::cerebras::{ChatOpts, Message, ResponseFormat};
 use crate::tiers::MAX_CLAIMS_PER_WORKER;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -32,7 +33,7 @@ pub fn extract_claims(
         &[Message::user(prompt)],
         ChatOpts {
             max_completion_tokens: Some(2500),
-            response_format: Some(response_format()),
+            response_format: Some(ResponseFormat::Claims),
             ..ChatOpts::default()
         },
     );
@@ -113,41 +114,6 @@ fn normalize_claim(claim: &str) -> String {
     claim.trim().to_lowercase()
 }
 
-fn response_format() -> serde_json::Value {
-    json!({
-        "type": "json_schema",
-        "json_schema": {
-            "name": "claims",
-            "strict": true,
-            "schema": {
-                "type": "object",
-                "properties": {
-                    "claims": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "claim": {
-                                    "type": "string",
-                                    "description": "one atomic factual claim"
-                                },
-                                "url": {
-                                    "type": "string",
-                                    "description": "full http(s) source URL exactly as written in the answer; if the claim has no http URL, use empty string"
-                                }
-                            },
-                            "required": ["claim", "url"],
-                            "additionalProperties": false
-                        }
-                    }
-                },
-                "required": ["claims"],
-                "additionalProperties": false
-            }
-        }
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -216,7 +182,6 @@ mod tests {
 
     #[test]
     fn dedup_research_claims_keeps_better_verdict_on_collision() {
-        // Finding 3: unsupported-then-supported duplicate dedups to supported.
         let claims = vec![
             research_claim("A happened", "https://example.com", Verdict::Unsupported),
             research_claim("A happened", "https://example.com", Verdict::Supported),

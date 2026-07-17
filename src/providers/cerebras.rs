@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::json;
 
 use crate::error::{Provider, ReceiptsError};
 use crate::providers::{
@@ -25,7 +25,7 @@ pub struct Message {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_calls: Option<Value>,
+    pub tool_calls: Option<Vec<MessageToolCall>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
 }
@@ -51,11 +51,11 @@ impl Message {
 
     /// Assistant message carrying tool calls and no `content` (Cerebras rejects
     /// `content` alongside `tool_calls`).
-    pub fn assistant_tool_calls(tool_calls: Value) -> Self {
+    pub fn assistant_tool_calls(tool_calls: &[ToolCall]) -> Self {
         Self {
             role: "assistant".into(),
             content: None,
-            tool_calls: Some(tool_calls),
+            tool_calls: Some(tool_calls.iter().map(MessageToolCall::from).collect()),
             tool_call_id: None,
         }
     }
@@ -70,12 +70,207 @@ impl Message {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MessageToolCall {
+    id: String,
+    #[serde(rename = "type")]
+    kind: ToolKind,
+    function: MessageToolCallFunction,
+}
+
+impl From<&ToolCall> for MessageToolCall {
+    fn from(call: &ToolCall) -> Self {
+        Self {
+            id: call.id.clone(),
+            kind: ToolKind::Function,
+            function: MessageToolCallFunction {
+                name: call.function_name.clone(),
+                arguments: call.arguments.clone(),
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum ToolKind {
+    Function,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct MessageToolCallFunction {
+    name: String,
+    arguments: String,
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ChatOpts {
     pub temperature: Option<f64>,
     pub max_completion_tokens: Option<u64>,
-    pub tools: Option<Value>,
-    pub response_format: Option<Value>,
+    pub tools: Option<Vec<ToolDefinition>>,
+    pub response_format: Option<ResponseFormat>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResponseFormat {
+    Subquestions,
+    Claims,
+    Relevance,
+    Verdict,
+}
+
+impl Serialize for ResponseFormat {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            Self::Subquestions => json!({
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "subquestions",
+                    "strict": true,
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "subquestions": {
+                                "type": "array",
+                                "items": {"type": "string"}
+                            }
+                        },
+                        "required": ["subquestions"],
+                        "additionalProperties": false
+                    }
+                }
+            }),
+            Self::Claims => json!({
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "claims",
+                    "strict": true,
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "claims": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "claim": {
+                                            "type": "string",
+                                            "description": "one atomic factual claim"
+                                        },
+                                        "url": {
+                                            "type": "string",
+                                            "description": "full http(s) source URL exactly as written in the answer; if the claim has no http URL, use empty string"
+                                        }
+                                    },
+                                    "required": ["claim", "url"],
+                                    "additionalProperties": false
+                                }
+                            }
+                        },
+                        "required": ["claims"],
+                        "additionalProperties": false
+                    }
+                }
+            }),
+            Self::Relevance => json!({
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "relevance",
+                    "strict": true,
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "relevance": {
+                                "type": "string",
+                                "enum": ["direct", "partially", "no"]
+                            }
+                        },
+                        "required": ["relevance"],
+                        "additionalProperties": false
+                    }
+                }
+            }),
+            Self::Verdict => json!({
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "verdict",
+                    "strict": true,
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "verdict": {
+                                "type": "string",
+                                "enum": ["supported", "partial", "unsupported"]
+                            },
+                            "note": {"type": "string"},
+                            "quote": {
+                                "type": ["string", "null"],
+                                "description": "exact supporting quote copied verbatim from SOURCE TEXT; null unless verdict is supported or partial"
+                            }
+                        },
+                        "required": ["verdict", "note", "quote"],
+                        "additionalProperties": false
+                    }
+                }
+            }),
+        }
+        .serialize(serializer)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ToolDefinition {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    function: FunctionDefinition,
+}
+
+impl ToolDefinition {
+    pub fn search() -> Self {
+        Self {
+            kind: "function",
+            function: FunctionDefinition {
+                name: "search",
+                description: "Web search. Returns top results with text excerpts.",
+                parameters: FunctionParameters {
+                    kind: "object",
+                    properties: SearchProperties {
+                        query: StringParameter { kind: "string" },
+                    },
+                    required: ["query"],
+                },
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+struct FunctionDefinition {
+    name: &'static str,
+    description: &'static str,
+    parameters: FunctionParameters,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+struct FunctionParameters {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    properties: SearchProperties,
+    required: [&'static str; 1],
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+struct SearchProperties {
+    query: StringParameter,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+struct StringParameter {
+    #[serde(rename = "type")]
+    kind: &'static str,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -106,6 +301,21 @@ pub struct CerebrasClient {
     agent: ureq::Agent,
     spend: SharedSpend,
     sleep_fn: SleepFn,
+}
+
+#[derive(Serialize)]
+struct ChatRequest<'a> {
+    model: &'a str,
+    messages: &'a [Message],
+    stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_completion_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<Vec<ToolDefinition>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_format: Option<ResponseFormat>,
 }
 
 impl CerebrasClient {
@@ -156,30 +366,19 @@ impl CerebrasClient {
         Ok(response)
     }
 
-    fn request_body(&self, messages: &[Message], opts: ChatOpts) -> Value {
-        let mut body = json!({
-            "model": self.model,
-            "messages": messages,
-            "stream": false,
-        });
-
-        if let Some(temperature) = opts.temperature {
-            body["temperature"] = json!(temperature);
+    fn request_body<'a>(&'a self, messages: &'a [Message], opts: ChatOpts) -> ChatRequest<'a> {
+        ChatRequest {
+            model: &self.model,
+            messages,
+            stream: false,
+            temperature: opts.temperature,
+            max_completion_tokens: opts.max_completion_tokens,
+            tools: opts.tools,
+            response_format: opts.response_format,
         }
-        if let Some(max_completion_tokens) = opts.max_completion_tokens {
-            body["max_completion_tokens"] = json!(max_completion_tokens);
-        }
-        if let Some(tools) = opts.tools {
-            body["tools"] = tools;
-        }
-        if let Some(response_format) = opts.response_format {
-            body["response_format"] = response_format;
-        }
-
-        body
     }
 
-    fn post_json(&self, url: &str, body: &Value) -> Result<String, HttpFailure> {
+    fn post_json(&self, url: &str, body: &impl Serialize) -> Result<String, HttpFailure> {
         let mut response = self
             .agent
             .post(url)
@@ -346,6 +545,7 @@ struct RawUsage {
 mod tests {
     use super::*;
     use crate::providers::Spend;
+    use serde_json::Value;
     use std::sync::Mutex;
 
     #[test]
@@ -366,8 +566,6 @@ mod tests {
 
     #[test]
     fn parses_content_tool_calls_and_usage_verbatim() {
-        // The HTTP envelope is valid JSON from the server; parse_chat_response no
-        // longer runs json_repair on it, so content comes through verbatim.
         let raw = r#"{
             "choices": [{
                 "message": {
@@ -392,10 +590,7 @@ mod tests {
 
     #[test]
     fn json_repair_on_model_content_yields_parseable_json() {
-        // json_repair is the wave-3 tool for model-emitted JSON content, not the
-        // envelope. A content string with a raw control char + bad \u must parse.
-        // The literal "\\u" is a backslash-u in the string; json_repair escapes
-        // the bad one and keeps the valid \u00E9.
+        // Escape a literal "\\u" without changing the valid \u00E9 sequence.
         let repaired = json_repair("{\"claim\":\"Café\u{0001} \\u broken \\u00E9\"}");
         let parsed: Value = serde_json::from_str(&repaired).unwrap();
 
@@ -404,7 +599,6 @@ mod tests {
 
     #[test]
     fn message_serializes_each_role_shape_correctly() {
-        // (a) user message emits only role + content.
         let user = serde_json::to_value(Message::user("hi")).unwrap();
         let user_obj = user.as_object().unwrap();
         assert_eq!(user_obj.len(), 2);
@@ -413,10 +607,11 @@ mod tests {
         assert!(user.get("tool_calls").is_none());
         assert!(user.get("tool_call_id").is_none());
 
-        // (b) assistant tool_calls message emits NO "content" key.
-        let assistant = serde_json::to_value(Message::assistant_tool_calls(json!([
-            {"id": "call_1", "type": "function", "function": {"name": "search", "arguments": "{}"}}
-        ])))
+        let assistant = serde_json::to_value(Message::assistant_tool_calls(&[ToolCall {
+            id: "call_1".into(),
+            function_name: "search".into(),
+            arguments: "{}".into(),
+        }]))
         .unwrap();
         let assistant_obj = assistant.as_object().unwrap();
         assert_eq!(assistant_obj.len(), 2);
@@ -424,12 +619,30 @@ mod tests {
         assert!(assistant.get("content").is_none(), "content must be absent");
         assert!(assistant["tool_calls"].is_array());
 
-        // (c) tool message emits tool_call_id.
         let tool = serde_json::to_value(Message::tool("call_1", "result body")).unwrap();
         assert_eq!(tool["role"], "tool");
         assert_eq!(tool["tool_call_id"], "call_1");
         assert_eq!(tool["content"], "result body");
         assert!(tool.get("tool_calls").is_none());
+    }
+
+    #[test]
+    fn search_tool_serializes_exact_wire_schema() {
+        assert_eq!(
+            serde_json::to_value(ToolDefinition::search()).unwrap(),
+            serde_json::json!({
+                "type": "function",
+                "function": {
+                    "name": "search",
+                    "description": "Web search. Returns top results with text excerpts.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"query": {"type": "string"}},
+                        "required": ["query"]
+                    }
+                }
+            })
+        );
     }
 
     #[test]

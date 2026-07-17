@@ -151,7 +151,6 @@ fn missing_keys_exit_auth_before_any_request() {
             .contains("CEREBRAS_API_KEY")
     );
     assert_eq!(server.request_count(), 0);
-    // F2: auth errors must carry a suggestedFix.
     assert!(
         stderr["error"]["suggestedFix"]
             .as_str()
@@ -281,7 +280,6 @@ fn exit_10_partial_on_budget_hit_with_zero_claims() {
 fn dry_run_quick_projection_matches_closed_form_sum() {
     let home = temp_home("dry-run-quick-projection");
 
-    // Import the same constants the production code uses.
     let decompose_cost = 0.001_f64; // DECOMPOSE_WORST_CASE_COST
     let worker_round_cost = 0.03_f64; // WORKER_ROUND_WORST_CASE_COST
     let extract_cost = 0.01_f64; // EXTRACT_WORST_CASE_COST

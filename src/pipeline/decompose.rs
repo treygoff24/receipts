@@ -1,9 +1,8 @@
 use serde::Deserialize;
-use serde_json::json;
 
 use crate::error::ReceiptsError;
-use crate::pipeline::{ChatProvider, chat_json};
-use crate::providers::cerebras::{ChatOpts, Message};
+use crate::pipeline::shared::{ChatProvider, chat_json};
+use crate::providers::cerebras::{ChatOpts, Message, ResponseFormat};
 
 #[derive(Debug, Deserialize)]
 struct DecomposeOutput {
@@ -24,32 +23,11 @@ pub fn decompose(
         &[Message::user(prompt)],
         ChatOpts {
             max_completion_tokens: Some(400),
-            response_format: Some(response_format()),
+            response_format: Some(ResponseFormat::Subquestions),
             ..ChatOpts::default()
         },
     )?;
     Ok(output.subquestions)
-}
-
-fn response_format() -> serde_json::Value {
-    json!({
-        "type": "json_schema",
-        "json_schema": {
-            "name": "subquestions",
-            "strict": true,
-            "schema": {
-                "type": "object",
-                "properties": {
-                    "subquestions": {
-                        "type": "array",
-                        "items": {"type": "string"}
-                    }
-                },
-                "required": ["subquestions"],
-                "additionalProperties": false
-            }
-        }
-    })
 }
 
 #[cfg(test)]

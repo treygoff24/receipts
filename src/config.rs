@@ -186,7 +186,6 @@ mod tests {
         assert_eq!(cfg.cerebras_api_key.as_deref(), Some("env-cerebras-key"));
         assert_eq!(cfg.model, "some-other-model");
         assert_eq!(cfg.max_concurrency, 7);
-        // Untouched fields still fall back to defaults.
         assert_eq!(cfg.api_base, DEFAULT_API_BASE);
 
         clear_env();

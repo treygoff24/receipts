@@ -2,6 +2,9 @@ use std::ffi::OsString;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
+pub use crate::pipeline::VerifyPolicy as VerifyArg;
+pub use crate::tiers::Depth as DepthArg;
+
 #[derive(Debug, Parser)]
 #[command(
     name = env!("CARGO_PKG_NAME"),
@@ -55,20 +58,6 @@ pub struct GlobalArgs {
     pub dry_run: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub enum DepthArg {
-    Quick,
-    Standard,
-    Deep,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub enum VerifyArg {
-    Adaptive,
-    Paranoid,
-    Off,
-}
-
 #[derive(Debug, Subcommand)]
 pub enum Commands {
     /// Run a source-verified research question.
@@ -107,26 +96,6 @@ pub enum SchemaTarget {
     Response,
     Error,
     All,
-}
-
-impl From<DepthArg> for crate::tiers::Depth {
-    fn from(value: DepthArg) -> Self {
-        match value {
-            DepthArg::Quick => crate::tiers::Depth::Quick,
-            DepthArg::Standard => crate::tiers::Depth::Standard,
-            DepthArg::Deep => crate::tiers::Depth::Deep,
-        }
-    }
-}
-
-impl From<VerifyArg> for crate::pipeline::VerifyPolicy {
-    fn from(value: VerifyArg) -> Self {
-        match value {
-            VerifyArg::Adaptive => crate::pipeline::VerifyPolicy::Adaptive,
-            VerifyArg::Paranoid => crate::pipeline::VerifyPolicy::Paranoid,
-            VerifyArg::Off => crate::pipeline::VerifyPolicy::Off,
-        }
-    }
 }
 
 pub fn args_with_default_ask(args: impl IntoIterator<Item = OsString>) -> Vec<OsString> {

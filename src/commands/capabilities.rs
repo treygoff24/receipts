@@ -6,7 +6,6 @@ use crate::config::{
     DEFAULT_API_BASE, DEFAULT_EXA_SEARCH_TYPE, DEFAULT_MAX_CONCURRENCY, DEFAULT_MODEL,
     EXA_SEARCH_TYPES,
 };
-use crate::envelope::{Budget, CostDollars, Diagnostics, SuccessEnvelope};
 use crate::error::ReceiptsError;
 use crate::tiers::{
     CONTENTS_WORST_CASE_COST, DECOMPOSE_WORST_CASE_COST, EXTRACT_WORST_CASE_COST,
@@ -102,24 +101,5 @@ pub fn run(_global: &GlobalArgs) -> Result<CommandSuccess, ReceiptsError> {
         }
     });
 
-    Ok(CommandSuccess {
-        envelope: SuccessEnvelope::new(
-            "capabilities",
-            data,
-            CostDollars {
-                model: 0.0,
-                search: 0.0,
-                total: 0.0,
-                estimated: false,
-            },
-            Budget { hit: None },
-            Diagnostics {
-                duration_ms: 0,
-                retries: 0,
-            },
-            None,
-        ),
-        exit_code: 0,
-        hint: None,
-    })
+    Ok(CommandSuccess::free("capabilities", data))
 }

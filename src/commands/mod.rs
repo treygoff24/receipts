@@ -17,6 +17,31 @@ pub struct CommandSuccess {
     pub hint: Option<&'static str>,
 }
 
+impl CommandSuccess {
+    fn free(command: &'static str, data: serde_json::Value) -> Self {
+        Self {
+            envelope: SuccessEnvelope::new(
+                command,
+                data,
+                CostDollars {
+                    model: 0.0,
+                    search: 0.0,
+                    total: 0.0,
+                    estimated: false,
+                },
+                Budget { hit: None },
+                Diagnostics {
+                    duration_ms: 0,
+                    retries: 0,
+                },
+                None,
+            ),
+            exit_code: 0,
+            hint: None,
+        }
+    }
+}
+
 pub fn run() -> i32 {
     let raw_args: Vec<std::ffi::OsString> = std::env::args_os().collect();
     let force_json = raw_args.iter().any(|arg| arg == "--json");
@@ -36,22 +61,8 @@ pub fn run() -> i32 {
                 } else {
                     "help"
                 };
-                let envelope = SuccessEnvelope::new(
-                    command,
-                    serde_json::json!({"text": text}),
-                    CostDollars {
-                        model: 0.0,
-                        search: 0.0,
-                        total: 0.0,
-                        estimated: false,
-                    },
-                    Budget { hit: None },
-                    Diagnostics {
-                        duration_ms: 0,
-                        retries: 0,
-                    },
-                    None,
-                );
+                let envelope =
+                    CommandSuccess::free(command, serde_json::json!({"text": text})).envelope;
                 emit_success(&envelope, true);
                 return 0;
             }

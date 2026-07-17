@@ -58,8 +58,8 @@ pub fn run(global: &GlobalArgs, args: &AskArgs) -> Result<CommandSuccess, Receip
 
     let data = pipeline::run(
         question,
-        global.depth.into(),
-        global.verify.into(),
+        global.depth,
+        global.verify,
         &budget,
         &chat,
         &search,
@@ -123,7 +123,7 @@ pub fn run(global: &GlobalArgs, args: &AskArgs) -> Result<CommandSuccess, Receip
 }
 
 fn dry_run(global: &GlobalArgs, question: &str) -> Result<CommandSuccess, ReceiptsError> {
-    let depth: crate::tiers::Depth = global.depth.into();
+    let depth = global.depth;
     let worker_count = match global.depth {
         DepthArg::Quick => 2,
         DepthArg::Standard => 4,
@@ -156,7 +156,6 @@ fn dry_run(global: &GlobalArgs, question: &str) -> Result<CommandSuccess, Receip
     let max_claims_per_worker = MAX_CLAIMS_PER_WORKER as f64;
     let expected_claims_per_worker = EXPECTED_CLAIMS_PER_WORKER as f64;
 
-    // Model component: decompose + worker rounds + extract + relevance + verify.
     let model_projected = decompose_calls as f64 * DECOMPOSE_WORST_CASE_COST
         + worker_count as f64 * max_rounds * WORKER_ROUND_WORST_CASE_COST
         + worker_count as f64 * EXTRACT_WORST_CASE_COST
@@ -204,9 +203,7 @@ fn dry_run(global: &GlobalArgs, question: &str) -> Result<CommandSuccess, Receip
         0.0
     };
 
-    // Search component: per-search-call costs (worker_count * max_rounds
-    // search calls) + per-worker contents fetch costs. Uses the same
-    // unit-cost semantics as live metering.
+    // Keep projected search units aligned with live metering.
     let search_projected =
         worker_count as f64 * max_rounds * crate::tiers::SEARCH_CALL_WORST_CASE_COST
             + worker_count as f64 * CONTENTS_WORST_CASE_COST;
@@ -322,7 +319,7 @@ pub(crate) fn verify_name(verify: VerifyArg) -> &'static str {
 fn today_string() -> String {
     let days = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
+        .expect("system clock is before the Unix epoch")
         .as_secs()
         / 86_400;
     let (year, month, day) = civil_from_days(days as i64);

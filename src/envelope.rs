@@ -181,7 +181,7 @@ fn render_success_human(env: &SuccessEnvelope) {
     );
     println!(
         "{}",
-        serde_json::to_string_pretty(&env.data).unwrap_or_else(|_| env.data.to_string())
+        serde_json::to_string_pretty(&env.data).expect("JSON value serializes")
     );
 }
 
@@ -198,7 +198,7 @@ fn render_error_human(env: &ErrorEnvelope) {
     if let Some(partial) = &env.error.partial {
         eprintln!(
             "partial: {}",
-            serde_json::to_string_pretty(partial).unwrap_or_else(|_| partial.to_string())
+            serde_json::to_string_pretty(partial).expect("JSON value serializes")
         );
     }
 }
@@ -244,7 +244,6 @@ mod tests {
         assert_eq!(json["diagnostics"]["durationMs"], 12100);
         assert_eq!(json["diagnostics"]["retries"], 0);
 
-        // No snake_case leakage.
         assert!(json.get("request_id").is_none());
         assert!(json.get("cost_dollars").is_none());
         assert!(json["diagnostics"].get("duration_ms").is_none());

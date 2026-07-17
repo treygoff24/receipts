@@ -207,10 +207,8 @@ impl ReceiptsError {
         }
     }
 
-    /// Coarse category for the error envelope's `error.category`. Currently
-    /// mirrors `code()` one-to-one; kept as a distinct field/method because
-    /// later waves may want a finer-grained `code` under the same category
-    /// (e.g. multiple upstream failure codes under category "upstream").
+    /// Coarse category for the error envelope's `error.category`; currently
+    /// mirrors `code()` one-to-one because the contract exposes both fields.
     pub fn category(&self) -> &'static str {
         self.code()
     }

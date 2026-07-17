@@ -1,8 +1,8 @@
-use serde_json::{Value, json};
+use serde::Deserialize;
 
 use crate::error::ReceiptsError;
-use crate::pipeline::{SearchTrailEntry, SourceMeta, StageContext, parse_model_json};
-use crate::providers::cerebras::{ChatOpts, Message, ToolCall};
+use crate::pipeline::shared::{SearchTrailEntry, SourceMeta, StageContext, parse_model_json};
+use crate::providers::cerebras::{ChatOpts, Message, ToolCall, ToolDefinition};
 use crate::providers::exa::SourceDoc;
 use crate::tiers::{WORKER_ROUND_WORST_CASE_COST, WorkerTask};
 
@@ -29,7 +29,7 @@ pub(crate) fn run_worker(
     let mut last_text = String::new();
 
     for _ in 0..MAX_ROUNDS {
-        if !ctx.may_launch(WORKER_ROUND_WORST_CASE_COST)? {
+        if !ctx.may_launch(WORKER_ROUND_WORST_CASE_COST) {
             return Ok(WorkerAnswer {
                 subquestion: task.subquestion,
                 answer: budget_answer(&last_text),
@@ -42,7 +42,7 @@ pub(crate) fn run_worker(
             ChatOpts {
                 temperature: Some(0.3),
                 max_completion_tokens: Some(1500),
-                tools: Some(json!([search_tool()])),
+                tools: Some(vec![ToolDefinition::search()]),
                 ..ChatOpts::default()
             },
         )?;
@@ -61,9 +61,7 @@ pub(crate) fn run_worker(
             });
         }
 
-        messages.push(Message::assistant_tool_calls(tool_calls_value(
-            &response.tool_calls,
-        )));
+        messages.push(Message::assistant_tool_calls(&response.tool_calls));
         for call in response.tool_calls {
             let content = run_tool_call(&call, ctx)?;
             messages.push(Message::tool(call.id, content));
@@ -75,41 +73,6 @@ pub(crate) fn run_worker(
         answer: round_limit_answer(&last_text),
         budget_stopped: false,
     })
-}
-
-pub fn search_tool() -> Value {
-    json!({
-        "type": "function",
-        "function": {
-            "name": "search",
-            "description": "Web search. Returns top results with text excerpts.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string"}
-                },
-                "required": ["query"]
-            }
-        }
-    })
-}
-
-fn tool_calls_value(calls: &[ToolCall]) -> Value {
-    Value::Array(
-        calls
-            .iter()
-            .map(|call| {
-                json!({
-                    "id": call.id,
-                    "type": "function",
-                    "function": {
-                        "name": call.function_name,
-                        "arguments": call.arguments
-                    }
-                })
-            })
-            .collect(),
-    )
 }
 
 fn run_tool_call(call: &ToolCall, ctx: &StageContext<'_>) -> Result<String, ReceiptsError> {
@@ -135,11 +98,14 @@ fn run_tool_call(call: &ToolCall, ctx: &StageContext<'_>) -> Result<String, Rece
 }
 
 fn parse_query(args: &str) -> Option<String> {
-    let value: Value = parse_model_json(args).ok()?;
-    value
-        .get("query")
-        .and_then(Value::as_str)
-        .map(ToString::to_string)
+    #[derive(Deserialize)]
+    struct SearchArguments {
+        query: String,
+    }
+
+    parse_model_json::<SearchArguments>(args)
+        .ok()
+        .map(|arguments| arguments.query)
 }
 
 fn record_results(

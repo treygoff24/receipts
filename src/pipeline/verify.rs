@@ -1,18 +1,17 @@
 use std::collections::HashMap;
 
 use serde::Deserialize;
-use serde_json::json;
 
-use crate::pipeline::{
+use crate::pipeline::shared::{
     ClaimCandidate, Relevance, ResearchClaim, StageContext, Verdict, VerifiedClaim, chat_json,
     run_chunked,
 };
-use crate::providers::cerebras::{ChatOpts, Message};
+use crate::providers::cerebras::{ChatOpts, Message, ResponseFormat};
 use crate::tiers::{
     CONTENTS_WORST_CASE_COST, RELEVANCE_WORST_CASE_COST, VERIFICATION_WORST_CASE_COST,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum VerifyPolicy {
     Adaptive,
     Paranoid,
@@ -106,7 +105,7 @@ fn classify_relevance(
     question: &str,
     ctx: &StageContext<'_>,
 ) -> RelevanceResult {
-    if !matches!(ctx.may_launch(RELEVANCE_WORST_CASE_COST), Ok(true)) {
+    if !ctx.may_launch(RELEVANCE_WORST_CASE_COST) {
         return RelevanceResult::OnTopic(candidate);
     }
 
@@ -116,7 +115,7 @@ fn classify_relevance(
         ChatOpts {
             temperature: Some(0.1),
             max_completion_tokens: Some(120),
-            response_format: Some(relevance_response_format()),
+            response_format: Some(ResponseFormat::Relevance),
             ..ChatOpts::default()
         },
     );
@@ -178,27 +177,6 @@ fn relevance_prompt(question: &str, claim: &str) -> String {
     )
 }
 
-fn relevance_response_format() -> serde_json::Value {
-    json!({
-        "type": "json_schema",
-        "json_schema": {
-            "name": "relevance",
-            "strict": true,
-            "schema": {
-                "type": "object",
-                "properties": {
-                    "relevance": {
-                        "type": "string",
-                        "enum": ["direct", "partially", "no"]
-                    }
-                },
-                "required": ["relevance"],
-                "additionalProperties": false
-            }
-        }
-    })
-}
-
 pub(crate) fn verify_candidates(
     candidates: Vec<ClaimCandidate>,
     policy: VerifyPolicy,
@@ -218,30 +196,17 @@ pub(crate) fn verify_candidates(
         let mut batch = Vec::new();
         while batch.len() < ctx.max_concurrency {
             let Some(candidate) = iter.next() else { break };
-            match ctx.may_launch(per_claim_cost) {
-                Ok(true) => batch.push(candidate),
-                Ok(false) => {
-                    out.push(disabled_claim(
-                        candidate,
-                        "verification not launched: budget hit",
-                    ));
-                    out.extend(
-                        iter.map(|rest| {
-                            disabled_claim(rest, "verification not launched: budget hit")
-                        }),
-                    );
-                    return out;
-                }
-                Err(err) => {
-                    out.push(disabled_claim(
-                        candidate,
-                        &format!("verification not launched: {err}"),
-                    ));
-                    out.extend(iter.map(|rest| {
-                        disabled_claim(rest, "verification not launched after gate failure")
-                    }));
-                    return out;
-                }
+            if ctx.may_launch(per_claim_cost) {
+                batch.push(candidate);
+            } else {
+                out.push(disabled_claim(
+                    candidate,
+                    "verification not launched: budget hit",
+                ));
+                out.extend(
+                    iter.map(|rest| disabled_claim(rest, "verification not launched: budget hit")),
+                );
+                return out;
             }
         }
 
@@ -317,16 +282,16 @@ fn source_for_claim(candidate: &ClaimCandidate, ctx: &StageContext<'_>) -> Optio
         return Some(hit);
     }
 
-    // Gate the paid Exa contents call before launching it.
-    match ctx.may_launch(CONTENTS_WORST_CASE_COST) {
-        Ok(true) => {}
-        _ => return None,
+    if !ctx.may_launch(CONTENTS_WORST_CASE_COST) {
+        return None;
     }
 
     let fetched = ctx.search.contents(url).ok().flatten()?;
-    if let Ok(mut cache) = ctx.state.source_cache.lock() {
-        cache.insert(url.to_string(), fetched.clone());
-    }
+    ctx.state
+        .source_cache
+        .lock()
+        .expect("source cache lock poisoned")
+        .insert(url.to_string(), fetched.clone());
     Some(SourceHit {
         text: fetched,
         published: None,
@@ -334,8 +299,16 @@ fn source_for_claim(candidate: &ClaimCandidate, ctx: &StageContext<'_>) -> Optio
 }
 
 fn cached_source(url: &str, ctx: &StageContext<'_>) -> Option<SourceHit> {
-    let cache = ctx.state.source_cache.lock().ok()?;
-    let meta = ctx.state.source_meta.lock().ok()?;
+    let cache = ctx
+        .state
+        .source_cache
+        .lock()
+        .expect("source cache lock poisoned");
+    let meta = ctx
+        .state
+        .source_meta
+        .lock()
+        .expect("source metadata lock poisoned");
 
     if let Some(text) = cache.get(url) {
         return Some(SourceHit {
@@ -370,10 +343,7 @@ fn judge(
     if needs_more && policy == VerifyPolicy::Adaptive {
         // Gate the +2 escalation judges. If the budget refuses, keep the
         // single judge's verdict as-is (partial stands, no escalation).
-        if ctx
-            .may_launch(2.0 * VERIFICATION_WORST_CASE_COST)
-            .unwrap_or(false)
-        {
+        if ctx.may_launch(2.0 * VERIFICATION_WORST_CASE_COST) {
             votes.push(judge_once(candidate, source_text, ctx)?);
             votes.push(judge_once(candidate, source_text, ctx)?);
         }
@@ -403,7 +373,7 @@ fn judge_once(
         ChatOpts {
             temperature: Some(0.1),
             max_completion_tokens: Some(600),
-            response_format: Some(response_format()),
+            response_format: Some(ResponseFormat::Verdict),
             ..ChatOpts::default()
         },
     )
@@ -419,7 +389,7 @@ fn majority(votes: Vec<VerdictOutput>, source_text: &str) -> (Verdict, String, O
     let best = verdicts
         .into_iter()
         .max_by_key(|verdict| counts.get(verdict).copied().unwrap_or_default())
-        .unwrap_or(Verdict::Partial);
+        .expect("verdict list is nonempty");
     let max_count = counts.get(&best).copied().unwrap_or_default();
     let tied = counts.values().filter(|count| **count == max_count).count() > 1;
     let verdict = if tied { Verdict::Partial } else { best };
@@ -506,32 +476,6 @@ fn disabled_claim(candidate: ClaimCandidate, note: &str) -> VerifiedClaim {
     }
 }
 
-fn response_format() -> serde_json::Value {
-    json!({
-        "type": "json_schema",
-        "json_schema": {
-            "name": "verdict",
-            "strict": true,
-            "schema": {
-                "type": "object",
-                "properties": {
-                    "verdict": {
-                        "type": "string",
-                        "enum": ["supported", "partial", "unsupported"]
-                    },
-                    "note": {"type": "string"},
-                    "quote": {
-                        "type": ["string", "null"],
-                        "description": "exact supporting quote copied verbatim from SOURCE TEXT; null unless verdict is supported or partial"
-                    }
-                },
-                "required": ["verdict", "note", "quote"],
-                "additionalProperties": false
-            }
-        }
-    })
-}
-
 fn truncate_chars(text: &str, limit: usize) -> String {
     text.chars().take(limit).collect()
 }
@@ -540,8 +484,8 @@ fn truncate_chars(text: &str, limit: usize) -> String {
 mod tests {
     use super::*;
     use crate::budget::Budget;
+    use crate::pipeline::shared::{RunParams, SourceMeta};
     use crate::pipeline::test_support::{FakeSearch, ScriptedChat, test_ctx, text_response};
-    use crate::pipeline::{RunParams, SourceMeta};
     use crate::providers::new_spend;
 
     fn candidate(url: &str) -> ClaimCandidate {
@@ -755,7 +699,6 @@ mod tests {
         );
 
         assert_eq!(claim.claim.verdict, Verdict::Partial);
-        // Only the single judge chat call happened — no escalation.
         assert_eq!(chat.messages.lock().unwrap().len(), 1);
     }
 
@@ -767,7 +710,6 @@ mod tests {
             "https://example.com".to_string(),
             Some("A happened".to_string()),
         );
-        // Budget exhausted: even the contents gate (0.005) is refused.
         let budget = Budget::new(Some(0.0), None);
         let params = RunParams::new("2026-07-01", 1, new_spend());
         let ctx = test_ctx(&chat, &search, &budget, &params);
@@ -779,17 +721,12 @@ mod tests {
         );
 
         assert_eq!(claim.claim.verdict, Verdict::NoSource);
-        // No contents call was made — the gate refused before fetching.
         assert!(search.contents_calls.lock().unwrap().is_empty());
-        // No chat call either.
         assert!(chat.messages.lock().unwrap().is_empty());
     }
 
     #[test]
     fn verified_claim_carries_subquestion_attribution() {
-        // Finding 1: verification preserves the subquestion so deep-tier
-        // refinement does not need a positional zip. Test that the attribution
-        // is carried by the verified claims, not position.
         let chat = ScriptedChat::new(vec![
             verdict("supported", "ok"),
             verdict("unsupported", "no"),
@@ -828,7 +765,6 @@ mod tests {
 
         let verified = verify_candidates(candidates, VerifyPolicy::Adaptive, &ctx);
 
-        // Each verified claim carries its own subquestion regardless of order.
         let sub_a = verified
             .iter()
             .find(|vc| vc.subquestion == "sub-a")
@@ -989,7 +925,6 @@ mod tests {
         assert_eq!(verified.len(), 1);
         assert_eq!(verified[0].claim.verdict, Verdict::OffTopic);
         assert_eq!(verified[0].claim.quote, None);
-        // Only the relevance call happened — no claim-vs-source verify call.
         assert_eq!(chat.messages.lock().unwrap().len(), 1);
     }
 
@@ -1074,11 +1009,6 @@ mod tests {
 
     #[test]
     fn relevance_gate_partially_maps_to_related_and_still_verifies() {
-        // Codex finding 1: "partially" must not be treated as fully on-topic.
-        // It proceeds to verification (unlike "no"), but is tagged `related`
-        // so a supported-but-only-related claim can't flip outcome to
-        // `answered` on its own (see pipeline::tests::
-        // derive_outcome_partial_when_supported_but_only_related).
         let chat = ScriptedChat::new(vec![
             text_response(r#"{"relevance":"partially"}"#),
             verdict("supported", "ok"),
