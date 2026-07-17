@@ -115,7 +115,6 @@ pub fn run(global: &GlobalArgs, args: &AskArgs) -> Result<CommandSuccess<AskData
                 brief = Some(text);
             }
             Ok(None) => {
-                // Budget refusal is a soft failure; preserve it as an uncertainty.
                 data.uncertainties
                     .push("brief omitted: budget gate refused synthesis call".to_string());
             }
@@ -161,7 +160,6 @@ fn dry_run(global: &GlobalArgs, question: &str) -> Result<CommandSuccess<AskData
         VerifyArg::Paranoid => 3.0,
         VerifyArg::Off => 0.0,
     };
-    // `--verify off` skips both relevance and source verification.
     let relevance_multiplier = if global.verify == VerifyArg::Off {
         0.0
     } else {
@@ -177,28 +175,21 @@ fn dry_run(global: &GlobalArgs, question: &str) -> Result<CommandSuccess<AskData
     let max_claims_per_worker = MAX_CLAIMS_PER_WORKER as f64;
     let expected_claims_per_worker = EXPECTED_CLAIMS_PER_WORKER as f64;
 
-    let model_projected = decompose_calls as f64 * DECOMPOSE_WORST_CASE_COST
-        + worker_count as f64 * max_rounds * WORKER_ROUND_WORST_CASE_COST
-        + worker_count as f64 * EXTRACT_WORST_CASE_COST
-        + worker_count as f64
-            * max_claims_per_worker
-            * relevance_multiplier
-            * RELEVANCE_WORST_CASE_COST
-        + worker_count as f64
-            * max_claims_per_worker
-            * verification_multiplier
-            * VERIFICATION_WORST_CASE_COST;
-    let model_expected = decompose_calls as f64 * DECOMPOSE_WORST_CASE_COST
-        + worker_count as f64 * expected_rounds * WORKER_ROUND_WORST_CASE_COST
-        + worker_count as f64 * EXTRACT_WORST_CASE_COST
-        + worker_count as f64
-            * expected_claims_per_worker
-            * relevance_multiplier
-            * RELEVANCE_WORST_CASE_COST
-        + worker_count as f64
-            * expected_claims_per_worker
-            * verification_multiplier
-            * VERIFICATION_WORST_CASE_COST;
+    let model_cost = |decompose_calls: usize, rounds: f64, claims_per_worker: f64| {
+        decompose_calls as f64 * DECOMPOSE_WORST_CASE_COST
+            + worker_count as f64 * rounds * WORKER_ROUND_WORST_CASE_COST
+            + worker_count as f64 * EXTRACT_WORST_CASE_COST
+            + worker_count as f64
+                * claims_per_worker
+                * relevance_multiplier
+                * RELEVANCE_WORST_CASE_COST
+            + worker_count as f64
+                * claims_per_worker
+                * verification_multiplier
+                * VERIFICATION_WORST_CASE_COST
+    };
+    let model_projected = model_cost(decompose_calls, max_rounds, max_claims_per_worker);
+    let model_expected = model_cost(decompose_calls, expected_rounds, expected_claims_per_worker);
 
     // Deep's worst case retries every dead subquestion through the full pipeline.
     let refinement_note = if global.depth == DepthArg::Deep {
@@ -207,26 +198,17 @@ fn dry_run(global: &GlobalArgs, question: &str) -> Result<CommandSuccess<AskData
         ""
     };
     let refinement_projected = if global.depth == DepthArg::Deep {
-        worker_count as f64 * max_rounds * WORKER_ROUND_WORST_CASE_COST
-            + worker_count as f64 * EXTRACT_WORST_CASE_COST
-            + worker_count as f64
-                * max_claims_per_worker
-                * relevance_multiplier
-                * RELEVANCE_WORST_CASE_COST
-            + worker_count as f64
-                * max_claims_per_worker
-                * verification_multiplier
-                * VERIFICATION_WORST_CASE_COST
+        model_cost(0, max_rounds, max_claims_per_worker)
     } else {
         0.0
     };
 
-    let search_projected =
-        worker_count as f64 * max_rounds * crate::tiers::SEARCH_CALL_WORST_CASE_COST
-            + worker_count as f64 * CONTENTS_WORST_CASE_COST;
-    let search_expected =
-        worker_count as f64 * expected_rounds * crate::tiers::SEARCH_CALL_WORST_CASE_COST
-            + worker_count as f64 * CONTENTS_WORST_CASE_COST;
+    let search_cost = |rounds: f64| {
+        worker_count as f64
+            * (rounds * crate::tiers::SEARCH_CALL_WORST_CASE_COST + CONTENTS_WORST_CASE_COST)
+    };
+    let search_projected = search_cost(max_rounds);
+    let search_expected = search_cost(expected_rounds);
 
     let total_projected = model_projected + refinement_projected + search_projected;
     let total_expected = model_expected + search_expected;

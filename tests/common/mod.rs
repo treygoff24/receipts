@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use serde_json::{Value, json};
+use serde::{Deserialize, Serialize};
 
 pub struct MockServer {
     base_url: String,
@@ -70,7 +70,10 @@ fn handle_client(mut stream: TcpStream) {
         "/chat/completions" => chat_response(&body),
         "/search" => search_response(&headers),
         "/contents" => contents_response(),
-        _ => (404, json!({"error":"not found"})),
+        _ => (
+            404,
+            MockResponse::Error(ErrorResponse { error: "not found" }),
+        ),
     };
     write_json(&mut stream, response.0, &response.1);
 }
@@ -125,88 +128,215 @@ fn read_request(stream: &mut TcpStream) -> std::io::Result<(String, String, Stri
     Ok((path, body, headers))
 }
 
-fn chat_response(body: &str) -> (u16, Value) {
-    let body: Value = serde_json::from_str(body).expect("mock chat request JSON");
+#[derive(Deserialize)]
+struct ChatRequest {
+    response_format: Option<ResponseFormat>,
+    messages: Vec<RequestMessage>,
+    tools: Option<Vec<RequestTool>>,
+}
+
+#[derive(Deserialize)]
+struct ResponseFormat {
+    json_schema: JsonSchema,
+}
+
+#[derive(Deserialize)]
+struct JsonSchema {
+    name: String,
+}
+
+#[derive(Deserialize)]
+struct RequestMessage {
+    role: MessageRole,
+}
+
+#[derive(Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+enum MessageRole {
+    System,
+    User,
+    Assistant,
+    Tool,
+}
+
+#[derive(Deserialize)]
+struct RequestTool {
+    #[serde(rename = "type")]
+    _kind: ToolKind,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum ToolKind {
+    Function,
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+enum MockResponse {
+    Chat(ChatResponse),
+    Search(SearchResponse),
+    Error(ErrorResponse),
+}
+
+#[derive(Serialize)]
+struct ChatResponse {
+    choices: [Choice; 1],
+    usage: Usage,
+}
+
+#[derive(Serialize)]
+struct Choice {
+    message: AssistantMessage,
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+enum AssistantMessage {
+    Content {
+        content: &'static str,
+    },
+    ToolCalls {
+        content: &'static str,
+        tool_calls: [ResponseToolCall; 1],
+    },
+}
+
+#[derive(Serialize)]
+struct ResponseToolCall {
+    id: &'static str,
+    function: ResponseFunction,
+}
+
+#[derive(Serialize)]
+struct ResponseFunction {
+    name: &'static str,
+    arguments: &'static str,
+}
+
+#[derive(Serialize)]
+struct Usage {
+    prompt_tokens: u64,
+    completion_tokens: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SearchResponse {
+    results: Vec<SearchResult>,
+    cost_dollars: CostDollars,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SearchResult {
+    url: &'static str,
+    title: &'static str,
+    published_date: &'static str,
+    text: &'static str,
+}
+
+#[derive(Serialize)]
+struct CostDollars {
+    total: f64,
+}
+
+#[derive(Serialize)]
+struct ErrorResponse {
+    error: &'static str,
+}
+
+fn chat_response(body: &str) -> (u16, MockResponse) {
+    let body: ChatRequest = serde_json::from_str(body).expect("mock chat request JSON");
     let schema_name = body
-        .pointer("/response_format/json_schema/name")
-        .and_then(Value::as_str);
+        .response_format
+        .as_ref()
+        .map(|format| format.json_schema.name.as_str());
     let has_tool_result = body
-        .get("messages")
-        .and_then(Value::as_array)
-        .is_some_and(|messages| {
-            messages
-                .iter()
-                .any(|message| message.get("role").and_then(Value::as_str) == Some("tool"))
-        });
-    let has_tools = body.get("tools").is_some();
+        .messages
+        .iter()
+        .any(|message| message.role == MessageRole::Tool);
+    let has_tools = body.tools.is_some();
 
     let message = match (schema_name, has_tool_result, has_tools) {
-        (Some("claims"), _, _) => {
-            json!({"content":"{\"claims\":[{\"claim\":\"Mock fact is supported\",\"url\":\"https://example.com/source\"}]}"})
-        }
-        (Some("verdict"), _, _) => {
-            json!({"content":"{\"verdict\":\"supported\",\"note\":\"mock source text supports the claim\",\"quote\":\"Mock fact is supported in this source text.\"}"})
-        }
-        (Some("relevance"), _, _) => {
-            json!({"content":"{\"relevance\":\"direct\"}"})
-        }
-        (_, true, _) => json!({"content":"Mock fact is supported by https://example.com/source."}),
-        (_, false, true) => json!({
-            "content":"",
-            "tool_calls":[{
-                "id":"call_search",
-                "function":{"name":"search","arguments":"{\"query\":\"mock receipts source\"}"}
-            }]
-        }),
-        _ => json!({"content":"ok"}),
+        (Some("claims"), _, _) => AssistantMessage::Content {
+            content: "{\"claims\":[{\"claim\":\"Mock fact is supported\",\"url\":\"https://example.com/source\"}]}",
+        },
+        (Some("verdict"), _, _) => AssistantMessage::Content {
+            content: "{\"verdict\":\"supported\",\"note\":\"mock source text supports the claim\",\"quote\":\"Mock fact is supported in this source text.\"}",
+        },
+        (Some("relevance"), _, _) => AssistantMessage::Content {
+            content: "{\"relevance\":\"direct\"}",
+        },
+        (_, true, _) => AssistantMessage::Content {
+            content: "Mock fact is supported by https://example.com/source.",
+        },
+        (_, false, true) => AssistantMessage::ToolCalls {
+            content: "",
+            tool_calls: [ResponseToolCall {
+                id: "call_search",
+                function: ResponseFunction {
+                    name: "search",
+                    arguments: "{\"query\":\"mock receipts source\"}",
+                },
+            }],
+        },
+        _ => AssistantMessage::Content { content: "ok" },
     };
 
     (
         200,
-        json!({
-            "choices": [{"message": message}],
-            "usage": {"prompt_tokens": 1000, "completion_tokens": 1000}
+        MockResponse::Chat(ChatResponse {
+            choices: [Choice { message }],
+            usage: Usage {
+                prompt_tokens: 1000,
+                completion_tokens: 1000,
+            },
         }),
     )
 }
 
-fn search_response(headers: &str) -> (u16, Value) {
+fn search_response(headers: &str) -> (u16, MockResponse) {
     let bad_key = headers
         .lines()
         .any(|line| line.eq_ignore_ascii_case("x-api-key: bad-exa"));
     if bad_key {
-        return (401, json!({"error":"invalid api key"}));
+        return (
+            401,
+            MockResponse::Error(ErrorResponse {
+                error: "invalid api key",
+            }),
+        );
     }
     (
         200,
-        json!({
-            "results": [{
-                "url": "https://example.com/source",
-                "title": "Mock source",
-                "publishedDate": "2026-07-01",
-                "text": "Mock fact is supported in this source text."
-            }],
-            "costDollars": {"total": 0.01}
+        MockResponse::Search(SearchResponse {
+            results: vec![search_result()],
+            cost_dollars: CostDollars { total: 0.01 },
         }),
     )
 }
 
-fn contents_response() -> (u16, Value) {
+fn contents_response() -> (u16, MockResponse) {
     (
         200,
-        json!({
-            "results": [{
-                "url": "https://example.com/source",
-                "title": "Mock source",
-                "publishedDate": "2026-07-01",
-                "text": "Mock fact is supported in this source text."
-            }],
-            "costDollars": {"total": 0.005}
+        MockResponse::Search(SearchResponse {
+            results: vec![search_result()],
+            cost_dollars: CostDollars { total: 0.005 },
         }),
     )
 }
 
-fn write_json(stream: &mut TcpStream, status: u16, value: &Value) {
+fn search_result() -> SearchResult {
+    SearchResult {
+        url: "https://example.com/source",
+        title: "Mock source",
+        published_date: "2026-07-01",
+        text: "Mock fact is supported in this source text.",
+    }
+}
+
+fn write_json(stream: &mut TcpStream, status: u16, value: &impl Serialize) {
     let reason = if status == 200 { "OK" } else { "Not Found" };
     let body = serde_json::to_string(value).unwrap();
     let response = format!(

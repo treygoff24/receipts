@@ -4,9 +4,8 @@
 
 use serde::Serialize;
 
-use crate::pipeline::ResearchClaim;
+use crate::claim::ResearchClaim;
 
-/// Which upstream API an error originated from, if any.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Provider {
     Cerebras,

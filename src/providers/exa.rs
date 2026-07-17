@@ -191,7 +191,7 @@ impl RawCostDollars {
 struct RawExaResult {
     url: String,
     title: Option<String>,
-    #[serde(alias = "publishedDate")]
+    #[serde(rename = "publishedDate")]
     published: Option<String>,
     text: Option<String>,
 }
@@ -222,13 +222,8 @@ mod tests {
             contents: Some(SearchContents { text: true }),
         };
         assert_eq!(
-            serde_json::to_value(search).unwrap(),
-            serde_json::json!({
-                "query": "q",
-                "type": "fast",
-                "numResults": 4,
-                "contents": {"text": true}
-            })
+            serde_json::to_string(&search).unwrap(),
+            r#"{"query":"q","type":"fast","numResults":4,"contents":{"text":true}}"#
         );
 
         let contents = ContentsRequest {
@@ -236,8 +231,8 @@ mod tests {
             text: true,
         };
         assert_eq!(
-            serde_json::to_value(contents).unwrap(),
-            serde_json::json!({"urls": ["https://example.com"], "text": true})
+            serde_json::to_string(&contents).unwrap(),
+            r#"{"urls":["https://example.com"],"text":true}"#
         );
     }
 

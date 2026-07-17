@@ -739,8 +739,10 @@ mod tests {
 
     #[test]
     fn off_topic_verdict_serializes_to_snake_case() {
-        let value = serde_json::to_value(Verdict::OffTopic).unwrap();
-        assert_eq!(value, serde_json::json!("off_topic"));
+        assert_eq!(
+            serde_json::to_string(&Verdict::OffTopic).unwrap(),
+            r#""off_topic""#
+        );
     }
 
     #[test]

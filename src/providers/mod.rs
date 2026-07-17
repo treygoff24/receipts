@@ -13,8 +13,6 @@ pub const USER_AGENT: &str = concat!(
 );
 const MAX_ATTEMPTS: usize = 6;
 
-/// Global per-request timeout for upstream HTTP calls.
-///
 /// ureq 3.x defaults to no global timeout, which would let a hung upstream
 /// block a worker thread forever and hang the whole run past `--max-seconds`.
 /// 120s matches the measured prototype.

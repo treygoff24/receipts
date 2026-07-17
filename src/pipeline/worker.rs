@@ -236,20 +236,14 @@ mod tests {
         assert_eq!(answer.answer, "answer https://example.com");
         let histories = chat.messages.lock().unwrap();
         let second = &histories[1];
-        assert!(
-            second[2].content.is_none(),
-            "assistant tool call has no content"
-        );
-        assert!(second[2].tool_calls.is_some());
-        assert_eq!(second[3].role, "tool");
-        assert_eq!(second[3].tool_call_id.as_deref(), Some("call_1"));
-        assert!(
-            second[3]
-                .content
-                .as_ref()
-                .unwrap()
-                .contains("URL: https://example.com")
-        );
+        assert!(matches!(&second[2], Message::Assistant { tool_calls } if tool_calls.len() == 1));
+        assert!(matches!(
+            &second[3],
+            Message::Tool {
+                tool_call_id,
+                content,
+            } if tool_call_id == "call_1" && content.contains("URL: https://example.com")
+        ));
         assert_eq!(
             ctx.state
                 .source_cache

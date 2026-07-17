@@ -2,7 +2,7 @@
 //! (stderr, failure) envelopes. On failure stdout stays empty — the whole
 //! result travels in the error envelope on stderr.
 
-use std::io::{self, IsTerminal, Write};
+use std::io::{self, IsTerminal};
 
 use serde::Serialize;
 use uuid::Uuid;
@@ -90,10 +90,7 @@ pub struct ErrorEnvelope {
     pub command: String,
     pub request_id: String,
     pub error: ErrorDetail,
-    /// The process exit code for this error. Not part of the JSON contract
-    /// (the consumer reads the process exit status, not this payload) — kept
-    /// on the envelope so `emit_error` can return it without re-deriving it
-    /// from `ReceiptsError` a second time.
+    /// Kept out of JSON; `emit_error` returns it as the process status.
     #[serde(skip)]
     pub exit_code: i32,
 }
@@ -123,32 +120,24 @@ impl ErrorEnvelope {
     }
 }
 
-/// Prints the success envelope. Human-readable text when stdout is a TTY and
-/// JSON wasn't forced; compact JSON otherwise (piped, or `--json`/`force_json`).
 pub fn emit_success<T: Serialize>(env: &SuccessEnvelope<T>, force_json: bool) {
     let stdout = io::stdout();
     if !force_json && stdout.is_terminal() {
         render_success_human(env);
     } else {
-        let mut lock = stdout.lock();
-        let _ = writeln!(
-            lock,
+        println!(
             "{}",
             serde_json::to_string(env).expect("envelope serializes")
         );
     }
 }
 
-/// Prints the error envelope to stderr (stdout stays empty on failure) and
-/// returns the process exit code for this error.
 pub fn emit_error(env: &ErrorEnvelope, force_json: bool) -> i32 {
     let stderr = io::stderr();
     if !force_json && stderr.is_terminal() {
         render_error_human(env);
     } else {
-        let mut lock = stderr.lock();
-        let _ = writeln!(
-            lock,
+        eprintln!(
             "{}",
             serde_json::to_string(env).expect("envelope serializes")
         );
@@ -210,11 +199,20 @@ mod tests {
 
     const FIXED_REQUEST_ID: &str = "00000000-0000-0000-0000-000000000000";
 
+    #[derive(Serialize)]
+    struct TestAskData {
+        question: &'static str,
+        outcome: &'static str,
+    }
+
     #[test]
     fn golden_success_envelope_has_exact_camel_case_fields() {
         let env = SuccessEnvelope::new(
             "ask",
-            serde_json::json!({"question": "what is rust", "outcome": "answered"}),
+            TestAskData {
+                question: "what is rust",
+                outcome: "answered",
+            },
             CostDollars {
                 model: 0.09,
                 search: 0.04,
@@ -229,24 +227,12 @@ mod tests {
             Some(FIXED_REQUEST_ID.to_string()),
         );
 
-        let json = serde_json::to_value(&env).unwrap();
-
-        assert_eq!(json["schema"], "receipts.cli.response.v1");
-        assert_eq!(json["ok"], true);
-        assert_eq!(json["command"], "ask");
-        assert_eq!(json["requestId"], FIXED_REQUEST_ID);
-        assert_eq!(json["data"]["outcome"], "answered");
-        assert_eq!(json["costDollars"]["model"], 0.09);
-        assert_eq!(json["costDollars"]["search"], 0.04);
-        assert_eq!(json["costDollars"]["total"], 0.13);
-        assert_eq!(json["costDollars"]["estimated"], false);
-        assert_eq!(json["budget"]["hit"], serde_json::Value::Null);
-        assert_eq!(json["diagnostics"]["durationMs"], 12100);
-        assert_eq!(json["diagnostics"]["retries"], 0);
-
-        assert!(json.get("request_id").is_none());
-        assert!(json.get("cost_dollars").is_none());
-        assert!(json["diagnostics"].get("duration_ms").is_none());
+        assert_eq!(
+            serde_json::to_string(&env).unwrap(),
+            format!(
+                r#"{{"schema":"receipts.cli.response.v1","ok":true,"command":"ask","requestId":"{FIXED_REQUEST_ID}","data":{{"question":"what is rust","outcome":"answered"}},"costDollars":{{"model":0.09,"search":0.04,"total":0.13,"estimated":false}},"budget":{{"hit":null}},"diagnostics":{{"durationMs":12100,"retries":0}}}}"#
+            )
+        );
     }
 
     #[test]
@@ -258,29 +244,12 @@ mod tests {
             .with_suggested_fix("wait and retry; Cerebras rate windows are minute-scale");
 
         let env = ErrorEnvelope::from_error("ask", &err, Some(FIXED_REQUEST_ID.to_string()));
-        let json = serde_json::to_value(&env).unwrap();
-
-        assert_eq!(json["schema"], "receipts.cli.error.v1");
-        assert_eq!(json["ok"], false);
-        assert_eq!(json["command"], "ask");
-        assert_eq!(json["requestId"], FIXED_REQUEST_ID);
-        assert_eq!(json["error"]["code"], "rate_limited");
-        assert_eq!(json["error"]["category"], "rate_limited");
-        assert_eq!(json["error"]["retryable"], true);
-        assert_eq!(json["error"]["provider"], "cerebras");
         assert_eq!(
-            json["error"]["message"],
-            "rate limited: Cerebras returned 429"
+            serde_json::to_string(&env).unwrap(),
+            format!(
+                r#"{{"schema":"receipts.cli.error.v1","ok":false,"command":"ask","requestId":"{FIXED_REQUEST_ID}","error":{{"code":"rate_limited","category":"rate_limited","retryable":true,"provider":"cerebras","message":"rate limited: Cerebras returned 429","partial":{{"claims":[]}},"suggestedFix":"wait and retry; Cerebras rate windows are minute-scale"}}}}"#
+            )
         );
-        assert_eq!(json["error"]["partial"], serde_json::json!({"claims": []}));
-        assert_eq!(
-            json["error"]["suggestedFix"],
-            "wait and retry; Cerebras rate windows are minute-scale"
-        );
-
-        assert!(json.get("request_id").is_none());
-        assert!(json.get("exitCode").is_none());
-        assert!(json.get("exit_code").is_none());
 
         assert_eq!(env.exit_code, 6);
     }
@@ -289,11 +258,12 @@ mod tests {
     fn error_envelope_without_provider_or_partial_omits_neither_field() {
         let err = ReceiptsError::usage("unknown flag --frobnicate");
         let env = ErrorEnvelope::from_error("ask", &err, Some(FIXED_REQUEST_ID.to_string()));
-        let json = serde_json::to_value(&env).unwrap();
-
-        assert_eq!(json["error"]["provider"], serde_json::Value::Null);
-        assert_eq!(json["error"]["partial"], serde_json::Value::Null);
-        assert_eq!(json["error"]["suggestedFix"], serde_json::Value::Null);
+        assert_eq!(
+            serde_json::to_string(&env).unwrap(),
+            format!(
+                r#"{{"schema":"receipts.cli.error.v1","ok":false,"command":"ask","requestId":"{FIXED_REQUEST_ID}","error":{{"code":"usage","category":"usage","retryable":false,"provider":null,"message":"usage error: unknown flag --frobnicate","partial":null,"suggestedFix":null}}}}"#
+            )
+        );
         assert_eq!(env.exit_code, 1);
     }
 
@@ -301,7 +271,7 @@ mod tests {
     fn request_id_defaults_to_a_fresh_uuid_when_none_given() {
         let env = SuccessEnvelope::new(
             "capabilities",
-            serde_json::json!({}),
+            (),
             CostDollars {
                 model: 0.0,
                 search: 0.0,

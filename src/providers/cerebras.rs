@@ -9,62 +9,53 @@ use crate::providers::{
     HttpFailure, SharedSpend, USER_AGENT, http_agent, join_url, new_spend, run_with_retries,
 };
 
-/// A chat-completions message.
-///
-/// Serializes to the three shapes Cerebras (OpenAI-compat) accepts:
-/// - user/system/assistant-text: `{"role","content"}`
+/// Serializes to the three shapes Cerebras (OpenAI-compat) used here:
+/// - user/system: `{"role","content"}`
 /// - assistant tool_calls (NO `content` key, which Cerebras rejects alongside tool_calls)
 /// - tool results: `{"role":"tool","tool_call_id","content"}`
-///
-/// Fields that don't apply to a given role are omitted from serialization so the
-/// wire payload stays well-formed.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Message {
-    pub role: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub content: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_calls: Option<Vec<MessageToolCall>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_call_id: Option<String>,
+#[serde(tag = "role", rename_all = "lowercase")]
+pub enum Message {
+    System {
+        content: String,
+    },
+    User {
+        content: String,
+    },
+    Assistant {
+        tool_calls: Vec<MessageToolCall>,
+    },
+    Tool {
+        tool_call_id: String,
+        content: String,
+    },
 }
 
 impl Message {
     pub fn system(text: impl Into<String>) -> Self {
-        Self {
-            role: "system".into(),
-            content: Some(text.into()),
-            tool_calls: None,
-            tool_call_id: None,
+        Self::System {
+            content: text.into(),
         }
     }
 
     pub fn user(text: impl Into<String>) -> Self {
-        Self {
-            role: "user".into(),
-            content: Some(text.into()),
-            tool_calls: None,
-            tool_call_id: None,
+        Self::User {
+            content: text.into(),
         }
     }
 
     /// Assistant message carrying tool calls and no `content` (Cerebras rejects
     /// `content` alongside `tool_calls`).
     pub fn assistant_tool_calls(tool_calls: &[ToolCall]) -> Self {
-        Self {
-            role: "assistant".into(),
-            content: None,
-            tool_calls: Some(tool_calls.iter().map(MessageToolCall::from).collect()),
-            tool_call_id: None,
+        Self::Assistant {
+            tool_calls: tool_calls.iter().map(MessageToolCall::from).collect(),
         }
     }
 
     pub fn tool(tool_call_id: impl Into<String>, content: impl Into<String>) -> Self {
-        Self {
-            role: "tool".into(),
-            content: Some(content.into()),
-            tool_calls: None,
-            tool_call_id: Some(tool_call_id.into()),
+        Self::Tool {
+            tool_call_id: tool_call_id.into(),
+            content: content.into(),
         }
     }
 }
@@ -74,7 +65,7 @@ pub struct MessageToolCall {
     id: String,
     #[serde(rename = "type")]
     kind: ToolKind,
-    function: MessageToolCallFunction,
+    function: ToolCallFunction,
 }
 
 impl From<&ToolCall> for MessageToolCall {
@@ -82,7 +73,7 @@ impl From<&ToolCall> for MessageToolCall {
         Self {
             id: call.id.clone(),
             kind: ToolKind::Function,
-            function: MessageToolCallFunction {
+            function: ToolCallFunction {
                 name: call.function_name.clone(),
                 arguments: call.arguments.clone(),
             },
@@ -97,7 +88,7 @@ enum ToolKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-struct MessageToolCallFunction {
+struct ToolCallFunction {
     name: String,
     arguments: String,
 }
@@ -283,7 +274,7 @@ pub struct ToolCall {
     pub arguments: String,
 }
 
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 pub struct TokenUsage {
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
@@ -392,8 +383,6 @@ impl CerebrasClient {
     }
 }
 
-/// Per-model price table: `(input $/1M tokens, output $/1M tokens)`.
-///
 /// Unknown models fall back to the gemma pricing so the meter errs on the high
 /// side rather than silently zeroing cost (which would corrupt `--max-dollars`).
 fn model_price_dollars_per_mtok(model: &str) -> (f64, f64) {
@@ -471,10 +460,7 @@ fn parse_chat_response(raw: &str) -> Result<ChatResponse, ReceiptsError> {
     Ok(ChatResponse {
         content: message.content.clone().unwrap_or_default(),
         tool_calls: tool_calls(message),
-        usage: TokenUsage {
-            prompt_tokens: response.usage.prompt_tokens,
-            completion_tokens: response.usage.completion_tokens,
-        },
+        usage: response.usage,
         wall_time_ms: 0,
     })
 }
@@ -496,7 +482,7 @@ fn tool_calls(message: &RawMessage) -> Vec<ToolCall> {
 #[derive(Debug, Deserialize)]
 struct RawChatResponse {
     choices: Vec<RawChoice>,
-    usage: RawUsage,
+    usage: TokenUsage,
 }
 
 #[derive(Debug, Deserialize)]
@@ -513,42 +499,39 @@ struct RawMessage {
 #[derive(Debug, Deserialize)]
 struct RawToolCall {
     id: String,
-    function: RawFunction,
-}
-
-#[derive(Debug, Deserialize)]
-struct RawFunction {
-    name: String,
-    arguments: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct RawUsage {
-    prompt_tokens: u64,
-    completion_tokens: u64,
+    function: ToolCallFunction,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::providers::Spend;
-    use serde_json::Value;
     use std::sync::Mutex;
+
+    #[derive(Deserialize)]
+    struct NameOutput {
+        name: String,
+    }
+
+    #[derive(Deserialize)]
+    struct ClaimOutput {
+        claim: String,
+    }
 
     #[test]
     fn json_repair_strips_bad_control_chars_but_keeps_accented_text() {
         let repaired = json_repair("{\"name\":\"Prós\u{0001}pera\"}");
-        let parsed: Value = serde_json::from_str(&repaired).unwrap();
+        let parsed: NameOutput = serde_json::from_str(&repaired).unwrap();
 
-        assert_eq!(parsed["name"], "Próspera");
+        assert_eq!(parsed.name, "Próspera");
     }
 
     #[test]
     fn json_repair_escapes_bad_unicode_escape_but_keeps_valid_accent_escape() {
         let repaired = json_repair(r#"{"name":"Próspera \u broken \u00F3"}"#);
-        let parsed: Value = serde_json::from_str(&repaired).unwrap();
+        let parsed: NameOutput = serde_json::from_str(&repaired).unwrap();
 
-        assert_eq!(parsed["name"], "Próspera \\u broken ó");
+        assert_eq!(parsed.name, "Próspera \\u broken ó");
     }
 
     #[test]
@@ -593,56 +576,39 @@ mod tests {
     fn json_repair_on_model_content_yields_parseable_json() {
         // Escape a literal "\\u" without changing the valid \u00E9 sequence.
         let repaired = json_repair("{\"claim\":\"Café\u{0001} \\u broken \\u00E9\"}");
-        let parsed: Value = serde_json::from_str(&repaired).unwrap();
+        let parsed: ClaimOutput = serde_json::from_str(&repaired).unwrap();
 
-        assert_eq!(parsed["claim"], "Café \\u broken é");
+        assert_eq!(parsed.claim, "Café \\u broken é");
     }
 
     #[test]
     fn message_serializes_each_role_shape_correctly() {
-        let user = serde_json::to_value(Message::user("hi")).unwrap();
-        let user_obj = user.as_object().unwrap();
-        assert_eq!(user_obj.len(), 2);
-        assert_eq!(user["role"], "user");
-        assert_eq!(user["content"], "hi");
-        assert!(user.get("tool_calls").is_none());
-        assert!(user.get("tool_call_id").is_none());
+        assert_eq!(
+            serde_json::to_string(&Message::user("hi")).unwrap(),
+            r#"{"role":"user","content":"hi"}"#
+        );
 
-        let assistant = serde_json::to_value(Message::assistant_tool_calls(&[ToolCall {
-            id: "call_1".into(),
-            function_name: "search".into(),
-            arguments: "{}".into(),
-        }]))
-        .unwrap();
-        let assistant_obj = assistant.as_object().unwrap();
-        assert_eq!(assistant_obj.len(), 2);
-        assert_eq!(assistant["role"], "assistant");
-        assert!(assistant.get("content").is_none(), "content must be absent");
-        assert!(assistant["tool_calls"].is_array());
+        assert_eq!(
+            serde_json::to_string(&Message::assistant_tool_calls(&[ToolCall {
+                id: "call_1".into(),
+                function_name: "search".into(),
+                arguments: "{}".into(),
+            }]))
+            .unwrap(),
+            r#"{"role":"assistant","tool_calls":[{"id":"call_1","type":"function","function":{"name":"search","arguments":"{}"}}]}"#
+        );
 
-        let tool = serde_json::to_value(Message::tool("call_1", "result body")).unwrap();
-        assert_eq!(tool["role"], "tool");
-        assert_eq!(tool["tool_call_id"], "call_1");
-        assert_eq!(tool["content"], "result body");
-        assert!(tool.get("tool_calls").is_none());
+        assert_eq!(
+            serde_json::to_string(&Message::tool("call_1", "result body")).unwrap(),
+            r#"{"role":"tool","tool_call_id":"call_1","content":"result body"}"#
+        );
     }
 
     #[test]
     fn search_tool_serializes_exact_wire_schema() {
         assert_eq!(
-            serde_json::to_value(ToolDefinition::search()).unwrap(),
-            serde_json::json!({
-                "type": "function",
-                "function": {
-                    "name": "search",
-                    "description": "Web search. Returns top results with text excerpts.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {"query": {"type": "string"}},
-                        "required": ["query"]
-                    }
-                }
-            })
+            serde_json::to_string(&ToolDefinition::search()).unwrap(),
+            r#"{"type":"function","function":{"name":"search","description":"Web search. Returns top results with text excerpts.","parameters":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}}}"#
         );
     }
 
@@ -660,14 +626,8 @@ mod tests {
         );
 
         assert_eq!(
-            serde_json::to_value(body).unwrap(),
-            serde_json::json!({
-                "model": "model",
-                "messages": [{"role": "user", "content": "hi"}],
-                "stream": false,
-                "temperature": 0.2,
-                "max_completion_tokens": 100
-            })
+            serde_json::to_string(&body).unwrap(),
+            r#"{"model":"model","messages":[{"role":"user","content":"hi"}],"stream":false,"temperature":0.2,"max_completion_tokens":100}"#
         );
     }
 

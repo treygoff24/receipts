@@ -1,4 +1,4 @@
-//! Depth-tier policy and budget unit-cost constants.
+//! Depth-tier policy. Cost ceilings come from the validated `swarm.py` prototype.
 
 use std::collections::{HashMap, HashSet};
 
@@ -9,11 +9,8 @@ pub enum Depth {
     Deep,
 }
 
-/// Measured worst-case launch costs from the validated `swarm.py` prototype.
 pub const DECOMPOSE_WORST_CASE_COST: f64 = 0.001;
-/// Measured worst-case launch costs from the validated `swarm.py` prototype.
 pub const WORKER_ROUND_WORST_CASE_COST: f64 = 0.03;
-/// Measured worst-case launch costs from the validated `swarm.py` prototype.
 pub const VERIFICATION_WORST_CASE_COST: f64 = 0.002;
 /// Measured prototype extraction ≈ $0.005, rounded up.
 pub const EXTRACT_WORST_CASE_COST: f64 = 0.01;

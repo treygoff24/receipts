@@ -1,13 +1,26 @@
-use serde::Serialize;
-use serde_json::{Value, json};
+use serde::{Serialize, Serializer};
+use serde_json::json;
 
 use crate::cli::{GlobalArgs, SchemaArgs, SchemaTarget};
 use crate::commands::CommandSuccess;
 use crate::error::ReceiptsError;
 
-#[derive(Serialize)]
-#[serde(transparent)]
-pub struct SchemaDocument(Value);
+pub enum SchemaDocument {
+    Response,
+    Error,
+}
+
+impl Serialize for SchemaDocument {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            Self::Response => serialize_response_schema(serializer),
+            Self::Error => serialize_error_schema(serializer),
+        }
+    }
+}
 
 #[derive(Serialize)]
 #[serde(untagged)]
@@ -35,7 +48,14 @@ pub fn run(
 }
 
 fn response_schema() -> SchemaDocument {
-    SchemaDocument(json!({
+    SchemaDocument::Response
+}
+
+fn serialize_response_schema<S>(serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$id": "receipts.cli.response.v1",
         "type": "object",
@@ -187,11 +207,19 @@ fn response_schema() -> SchemaDocument {
             "budget": {"type": "object", "required": ["hit"], "properties": {"hit": {"enum": ["dollars", "seconds", null]}}},
             "diagnostics": {"type": "object", "required": ["durationMs", "retries"], "properties": {"durationMs": {"type": "integer"}, "retries": {"type": "integer"}}}
         }
-    }))
+    })
+    .serialize(serializer)
 }
 
 fn error_schema() -> SchemaDocument {
-    SchemaDocument(json!({
+    SchemaDocument::Error
+}
+
+fn serialize_error_schema<S>(serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$id": "receipts.cli.error.v1",
         "type": "object",
@@ -215,5 +243,6 @@ fn error_schema() -> SchemaDocument {
                 }
             }
         }
-    }))
+    })
+    .serialize(serializer)
 }
