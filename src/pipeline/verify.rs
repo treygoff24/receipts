@@ -18,6 +18,18 @@ pub enum VerifyPolicy {
     Off,
 }
 
+impl VerifyPolicy {
+    pub const DEFAULT: Self = Self::Adaptive;
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Adaptive => "adaptive",
+            Self::Paranoid => "paranoid",
+            Self::Off => "off",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 struct VerdictOutput {
     verdict: Verdict,
@@ -121,18 +133,16 @@ fn classify_relevance(
     );
     match parsed {
         Ok(output) if output.relevance == RelevanceVote::No => {
-            RelevanceResult::OffTopic(VerifiedClaim {
-                subquestion: candidate.subquestion,
-                claim: ResearchClaim {
-                    claim: candidate.claim,
-                    source_url: Some(candidate.url),
-                    quote: None,
-                    verdict: Verdict::OffTopic,
+            RelevanceResult::OffTopic(verified_claim(
+                ClaimCandidate {
                     relevance: Relevance::OffTopic,
-                    note: "claim does not answer or bear on the original question".to_string(),
-                    published: None,
+                    ..candidate
                 },
-            })
+                Verdict::OffTopic,
+                None,
+                "claim does not answer or bear on the original question",
+                None,
+            ))
         }
         Ok(output) => RelevanceResult::OnTopic(ClaimCandidate {
             relevance: match output.relevance {
@@ -238,37 +248,21 @@ pub(crate) fn verify_claim(
         return disabled_claim(candidate, "verification disabled");
     }
 
-    let subquestion = candidate.subquestion.clone();
-    let relevance = candidate.relevance;
     let Some(source) = source_for_claim(&candidate, ctx) else {
         return disabled_claim(candidate, "no source text available");
     };
 
     match judge(&candidate, &source.text, policy, ctx) {
-        Ok((verdict, note, quote)) => VerifiedClaim {
-            subquestion,
-            claim: ResearchClaim {
-                claim: candidate.claim,
-                source_url: Some(candidate.url),
-                quote,
-                verdict,
-                relevance,
-                note,
-                published: source.published,
-            },
-        },
-        Err(err) => VerifiedClaim {
-            subquestion,
-            claim: ResearchClaim {
-                claim: candidate.claim,
-                source_url: Some(candidate.url),
-                quote: None,
-                verdict: Verdict::NoSource,
-                relevance,
-                note: format!("verification failed: {err}"),
-                published: source.published,
-            },
-        },
+        Ok((verdict, note, quote)) => {
+            verified_claim(candidate, verdict, quote, note, source.published)
+        }
+        Err(err) => verified_claim(
+            candidate,
+            Verdict::NoSource,
+            None,
+            format!("verification failed: {err}"),
+            source.published,
+        ),
     }
 }
 
@@ -389,7 +383,7 @@ fn majority(votes: Vec<VerdictOutput>, source_text: &str) -> (Verdict, String, O
         .into_iter()
         .max_by_key(|verdict| counts.get(verdict).copied().unwrap_or_default())
         .expect("verdict list is nonempty");
-    let max_count = counts.get(&best).copied().unwrap_or_default();
+    let max_count = counts[&best];
     let tied = counts.values().filter(|count| **count == max_count).count() > 1;
     let verdict = if tied { Verdict::Partial } else { best };
 
@@ -452,16 +446,26 @@ fn normalize_for_match(text: &str) -> String {
 }
 
 fn disabled_claim(candidate: ClaimCandidate, note: &str) -> VerifiedClaim {
+    verified_claim(candidate, Verdict::NoSource, None, note, None)
+}
+
+fn verified_claim(
+    candidate: ClaimCandidate,
+    verdict: Verdict,
+    quote: Option<String>,
+    note: impl Into<String>,
+    published: Option<String>,
+) -> VerifiedClaim {
     VerifiedClaim {
         subquestion: candidate.subquestion,
         claim: ResearchClaim {
             claim: candidate.claim,
             source_url: Some(candidate.url),
-            quote: None,
-            verdict: Verdict::NoSource,
+            quote,
+            verdict,
             relevance: candidate.relevance,
-            note: note.to_string(),
-            published: None,
+            note: note.into(),
+            published,
         },
     }
 }
@@ -491,6 +495,14 @@ mod tests {
         text_response(&format!(r#"{{"verdict":"{verdict}","note":"{note}"}}"#))
     }
 
+    fn cache_source(ctx: &StageContext<'_>, url: &str, text: &str) {
+        ctx.state
+            .source_cache
+            .lock()
+            .unwrap()
+            .insert(url.to_string(), text.to_string());
+    }
+
     #[test]
     fn exact_cache_hit_uses_source_and_published_date() {
         let chat = ScriptedChat::new(vec![verdict("supported", "ok")]);
@@ -498,11 +510,7 @@ mod tests {
         let budget = Budget::new(None, None);
         let params = RunParams::new("2026-07-01", 1, new_spend());
         let ctx = test_ctx(&chat, &search, &budget, &params);
-        ctx.state
-            .source_cache
-            .lock()
-            .unwrap()
-            .insert("https://example.com".to_string(), "A happened".to_string());
+        cache_source(&ctx, "https://example.com", "A happened");
         ctx.state.source_meta.lock().unwrap().insert(
             "https://example.com".to_string(),
             SourceMeta {
@@ -528,10 +536,7 @@ mod tests {
         let budget = Budget::new(None, None);
         let params = RunParams::new("2026-07-01", 1, new_spend());
         let ctx = test_ctx(&chat, &search, &budget, &params);
-        ctx.state.source_cache.lock().unwrap().insert(
-            "https://example.com/page?utm=1".to_string(),
-            "A happened".to_string(),
-        );
+        cache_source(&ctx, "https://example.com/page?utm=1", "A happened");
 
         let claim = verify_claim(
             candidate("https://example.com/page"),
@@ -602,11 +607,7 @@ mod tests {
         let budget = Budget::new(None, None);
         let params = RunParams::new("2026-07-01", 1, new_spend());
         let ctx = test_ctx(&chat, &search, &budget, &params);
-        ctx.state
-            .source_cache
-            .lock()
-            .unwrap()
-            .insert("https://example.com".to_string(), "A happened".to_string());
+        cache_source(&ctx, "https://example.com", "A happened");
 
         let claim = verify_claim(
             candidate("https://example.com"),
@@ -629,11 +630,7 @@ mod tests {
         let budget = Budget::new(None, None);
         let params = RunParams::new("2026-07-01", 1, new_spend());
         let ctx = test_ctx(&chat, &search, &budget, &params);
-        ctx.state
-            .source_cache
-            .lock()
-            .unwrap()
-            .insert("https://example.com".to_string(), "A happened".to_string());
+        cache_source(&ctx, "https://example.com", "A happened");
 
         let claim = verify_claim(
             candidate("https://example.com"),
@@ -672,11 +669,7 @@ mod tests {
             spend.dollars = 0.007;
         }
         let ctx = test_ctx(&chat, &search, &budget, &params);
-        ctx.state
-            .source_cache
-            .lock()
-            .unwrap()
-            .insert("https://example.com".to_string(), "A happened".to_string());
+        cache_source(&ctx, "https://example.com", "A happened");
 
         let claim = verify_claim(
             candidate("https://example.com"),
@@ -723,16 +716,8 @@ mod tests {
         // parallel judges would race for who gets "supported".
         let params = RunParams::new("2026-07-01", 1, new_spend());
         let ctx = test_ctx(&chat, &search, &budget, &params);
-        ctx.state
-            .source_cache
-            .lock()
-            .unwrap()
-            .insert("https://a.com".to_string(), "A happened".to_string());
-        ctx.state
-            .source_cache
-            .lock()
-            .unwrap()
-            .insert("https://b.com".to_string(), "A happened".to_string());
+        cache_source(&ctx, "https://a.com", "A happened");
+        cache_source(&ctx, "https://b.com", "A happened");
 
         let candidates = vec![
             ClaimCandidate {
@@ -784,9 +769,10 @@ mod tests {
         let budget = Budget::new(None, None);
         let params = RunParams::new("2026-07-01", 1, new_spend());
         let ctx = test_ctx(&chat, &search, &budget, &params);
-        ctx.state.source_cache.lock().unwrap().insert(
-            "https://example.com".to_string(),
-            "Some preamble.   A   happened yesterday. Some epilogue.".to_string(),
+        cache_source(
+            &ctx,
+            "https://example.com",
+            "Some preamble.   A   happened yesterday. Some epilogue.",
         );
 
         let claim = verify_claim(
@@ -811,11 +797,7 @@ mod tests {
         let budget = Budget::new(None, None);
         let params = RunParams::new("2026-07-01", 1, new_spend());
         let ctx = test_ctx(&chat, &search, &budget, &params);
-        ctx.state
-            .source_cache
-            .lock()
-            .unwrap()
-            .insert("https://example.com".to_string(), "A happened".to_string());
+        cache_source(&ctx, "https://example.com", "A happened");
 
         let claim = verify_claim(
             candidate("https://example.com"),
@@ -840,11 +822,7 @@ mod tests {
         let budget = Budget::new(None, None);
         let params = RunParams::new("2026-07-01", 1, new_spend());
         let ctx = test_ctx(&chat, &search, &budget, &params);
-        ctx.state
-            .source_cache
-            .lock()
-            .unwrap()
-            .insert("https://example.com".to_string(), "A happened".to_string());
+        cache_source(&ctx, "https://example.com", "A happened");
 
         let claim = verify_claim(
             candidate("https://example.com"),
@@ -864,11 +842,7 @@ mod tests {
         let budget = Budget::new(None, None);
         let params = RunParams::new("2026-07-01", 1, new_spend());
         let ctx = test_ctx(&chat, &search, &budget, &params);
-        ctx.state
-            .source_cache
-            .lock()
-            .unwrap()
-            .insert("https://example.com".to_string(), "A happened".to_string());
+        cache_source(&ctx, "https://example.com", "A happened");
 
         let claim = verify_claim(
             candidate("https://example.com"),
@@ -924,11 +898,7 @@ mod tests {
         let budget = Budget::new(None, None);
         let params = RunParams::new("2026-07-01", 1, new_spend());
         let ctx = test_ctx(&chat, &search, &budget, &params);
-        ctx.state
-            .source_cache
-            .lock()
-            .unwrap()
-            .insert("https://example.com".to_string(), "A happened".to_string());
+        cache_source(&ctx, "https://example.com", "A happened");
 
         let verified = gate_and_verify(
             vec![candidate("https://example.com")],
@@ -965,8 +935,6 @@ mod tests {
 
     #[test]
     fn relevance_gate_fails_open_on_unparseable_response() {
-        // A model hiccup on the relevance call must not silently drop a real
-        // claim — it should fall through to normal verification.
         let chat = ScriptedChat::new(vec![
             text_response("not json"),
             text_response("still not json"),
@@ -976,11 +944,7 @@ mod tests {
         let budget = Budget::new(None, None);
         let params = RunParams::new("2026-07-01", 1, new_spend());
         let ctx = test_ctx(&chat, &search, &budget, &params);
-        ctx.state
-            .source_cache
-            .lock()
-            .unwrap()
-            .insert("https://example.com".to_string(), "A happened".to_string());
+        cache_source(&ctx, "https://example.com", "A happened");
 
         let verified = gate_and_verify(
             vec![candidate("https://example.com")],

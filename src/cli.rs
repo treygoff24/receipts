@@ -34,7 +34,7 @@ pub struct GlobalArgs {
     pub model: Option<String>,
 
     /// Research depth tier.
-    #[arg(long, global = true, value_enum, default_value_t = DepthArg::Standard)]
+    #[arg(long, global = true, value_enum, default_value_t = DepthArg::DEFAULT)]
     pub depth: DepthArg,
 
     /// Hard wall-clock cap in seconds.
@@ -46,7 +46,7 @@ pub struct GlobalArgs {
     pub max_dollars: Option<f64>,
 
     /// Verification policy.
-    #[arg(long, global = true, value_enum, default_value_t = VerifyArg::Adaptive)]
+    #[arg(long, global = true, value_enum, default_value_t = VerifyArg::DEFAULT)]
     pub verify: VerifyArg,
 
     /// Add a brief convenience summary when supported by the pipeline.

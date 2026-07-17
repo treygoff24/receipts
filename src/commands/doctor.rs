@@ -5,9 +5,7 @@ use serde::Serialize;
 
 use crate::cli::{DoctorArgs, GlobalArgs};
 use crate::commands::CommandSuccess;
-use crate::commands::ask::{
-    cost_from_spend, depth_name, exa_base_url, require_key, retries_from_spend, verify_name,
-};
+use crate::commands::ask::{cost_from_spend, exa_base_url, require_key, retries_from_spend};
 use crate::config::Config;
 use crate::envelope::{Budget, Diagnostics, SuccessEnvelope};
 use crate::error::{Provider, ReceiptsError};
@@ -144,8 +142,8 @@ fn offline_checks(cfg: &Config, global: &GlobalArgs) -> Vec<DoctorCheck> {
                 exa_base_url(),
                 cfg.exa_search_type,
                 cfg.max_concurrency,
-                depth_name(global.depth),
-                verify_name(global.verify)
+                global.depth.as_str(),
+                global.verify.as_str()
             ),
         ),
     ]

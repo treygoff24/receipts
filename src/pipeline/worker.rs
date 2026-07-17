@@ -32,7 +32,7 @@ pub(crate) fn run_worker(
         if !ctx.may_launch(WORKER_ROUND_WORST_CASE_COST) {
             return Ok(WorkerAnswer {
                 subquestion: task.subquestion,
-                answer: budget_answer(&last_text),
+                answer: answer_with_marker(&last_text, "(budget hit before worker round)"),
                 budget_stopped: true,
             });
         }
@@ -70,7 +70,7 @@ pub(crate) fn run_worker(
 
     Ok(WorkerAnswer {
         subquestion: task.subquestion,
-        answer: round_limit_answer(&last_text),
+        answer: answer_with_marker(&last_text, "(round limit hit)"),
         budget_stopped: false,
     })
 }
@@ -170,19 +170,11 @@ fn truncate_chars(text: &str, limit: usize) -> String {
     out
 }
 
-fn round_limit_answer(last_text: &str) -> String {
+fn answer_with_marker(last_text: &str, marker: &str) -> String {
     if last_text.trim().is_empty() {
-        "(round limit hit)".to_string()
+        marker.to_string()
     } else {
-        format!("{last_text}\n(round limit hit)")
-    }
-}
-
-fn budget_answer(last_text: &str) -> String {
-    if last_text.trim().is_empty() {
-        "(budget hit before worker round)".to_string()
-    } else {
-        format!("{last_text}\n(budget hit before worker round)")
+        format!("{last_text}\n{marker}")
     }
 }
 

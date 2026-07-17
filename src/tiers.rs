@@ -40,6 +40,24 @@ pub struct WorkerTask {
 }
 
 impl Depth {
+    pub const DEFAULT: Self = Self::Standard;
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Depth::Quick => "quick",
+            Depth::Standard => "standard",
+            Depth::Deep => "deep",
+        }
+    }
+
+    pub const fn worker_count(self) -> usize {
+        match self {
+            Depth::Quick => 2,
+            Depth::Standard => 4,
+            Depth::Deep => 8,
+        }
+    }
+
     pub fn decompose_count(self) -> usize {
         match self {
             Depth::Quick => 0,

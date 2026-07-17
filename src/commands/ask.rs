@@ -149,11 +149,7 @@ pub fn run(global: &GlobalArgs, args: &AskArgs) -> Result<CommandSuccess<AskData
 
 fn dry_run(global: &GlobalArgs, question: &str) -> Result<CommandSuccess<AskData>, ReceiptsError> {
     let depth = global.depth;
-    let worker_count = match global.depth {
-        DepthArg::Quick => 2,
-        DepthArg::Standard => 4,
-        DepthArg::Deep => 8,
-    };
+    let worker_count = depth.worker_count();
     let decompose_calls = usize::from(depth.needs_decompose());
     let verification_multiplier = match global.verify {
         VerifyArg::Adaptive => 1.0,
@@ -218,11 +214,11 @@ fn dry_run(global: &GlobalArgs, question: &str) -> Result<CommandSuccess<AskData
         outcome: Outcome::Answered,
         dry_run: true,
         planned_fanout: PlannedFanout {
-            tier: depth_name(global.depth),
+            tier: global.depth.as_str(),
             workers: worker_count,
             decompose_calls,
             max_worker_rounds: crate::pipeline::worker::MAX_ROUNDS,
-            verify: verify_name(global.verify),
+            verify: global.verify.as_str(),
             refinement_pass: global.depth == DepthArg::Deep,
             note: refinement_note,
         },
@@ -287,22 +283,6 @@ pub(crate) fn require_key(
 
 pub(crate) fn exa_base_url() -> String {
     env::var("RECEIPTS_EXA_BASE").unwrap_or_else(|_| EXA_DEFAULT_BASE_URL.to_string())
-}
-
-pub(crate) fn depth_name(depth: DepthArg) -> &'static str {
-    match depth {
-        DepthArg::Quick => "quick",
-        DepthArg::Standard => "standard",
-        DepthArg::Deep => "deep",
-    }
-}
-
-pub(crate) fn verify_name(verify: VerifyArg) -> &'static str {
-    match verify {
-        VerifyArg::Adaptive => "adaptive",
-        VerifyArg::Paranoid => "paranoid",
-        VerifyArg::Off => "off",
-    }
 }
 
 fn today_string() -> String {

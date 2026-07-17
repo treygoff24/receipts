@@ -1,6 +1,7 @@
+use clap::ValueEnum;
 use serde::Serialize;
 
-use crate::cli::GlobalArgs;
+use crate::cli::{DepthArg, GlobalArgs, VerifyArg};
 use crate::commands::CommandSuccess;
 use crate::config::{
     DEFAULT_API_BASE, DEFAULT_EXA_SEARCH_TYPE, DEFAULT_MAX_CONCURRENCY, DEFAULT_MODEL,
@@ -59,7 +60,7 @@ struct GlobalFlag {
     #[serde(rename = "type")]
     kind: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
-    values: Option<&'static [&'static str]>,
+    values: Option<Vec<&'static str>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     minimum: Option<u8>,
     default: Option<CapabilityValue>,
@@ -167,8 +168,17 @@ pub fn run(_global: &GlobalArgs) -> Result<CommandSuccess<Capabilities>, Receipt
 
     let mut json_flag = flag("--json", "bool", Some(CapabilityValue::Bool(false)));
     json_flag.description = Some("force JSON envelope");
-    let mut depth = flag("--depth", "enum", Some(CapabilityValue::String("standard")));
-    depth.values = Some(&["quick", "standard", "deep"]);
+    let mut depth = flag(
+        "--depth",
+        "enum",
+        Some(CapabilityValue::String(DepthArg::DEFAULT.as_str())),
+    );
+    depth.values = Some(
+        DepthArg::value_variants()
+            .iter()
+            .map(|depth| depth.as_str())
+            .collect(),
+    );
     let mut max_seconds = flag("--max-seconds", "integer", None);
     max_seconds.minimum = Some(1);
     let mut max_dollars = flag("--max-dollars", "number", None);
@@ -176,9 +186,14 @@ pub fn run(_global: &GlobalArgs) -> Result<CommandSuccess<Capabilities>, Receipt
     let mut verify = flag(
         "--verify",
         "enum",
-        Some(CapabilityValue::String("adaptive")),
+        Some(CapabilityValue::String(VerifyArg::DEFAULT.as_str())),
     );
-    verify.values = Some(&["adaptive", "paranoid", "off"]);
+    verify.values = Some(
+        VerifyArg::value_variants()
+            .iter()
+            .map(|verify| verify.as_str())
+            .collect(),
+    );
 
     let required_for = &["ask", "doctor --online"];
     let mut cerebras_key = env_var("CEREBRAS_API_KEY", None);
@@ -256,22 +271,22 @@ pub fn run(_global: &GlobalArgs) -> Result<CommandSuccess<Capabilities>, Receipt
         ],
         tiers: [
             Tier {
-                name: "quick",
-                workers: 2,
+                name: DepthArg::Quick.as_str(),
+                workers: DepthArg::Quick.worker_count(),
                 latency_expectation: "~10s target",
                 cost_expectation: "~$0.05-$0.10 typical",
                 notes: "two same-question workers with complementary search angles",
             },
             Tier {
-                name: "standard",
-                workers: 4,
+                name: DepthArg::Standard.as_str(),
+                workers: DepthArg::Standard.worker_count(),
                 latency_expectation: "~9-15s measured",
                 cost_expectation: "~$0.15 measured",
                 notes: "default; four decomposed subquestions",
             },
             Tier {
-                name: "deep",
-                workers: 8,
+                name: DepthArg::Deep.as_str(),
+                workers: DepthArg::Deep.worker_count(),
                 latency_expectation: "~9s measured",
                 cost_expectation: "~$0.31 measured",
                 notes: "adaptive verification and refinement pass",
