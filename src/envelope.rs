@@ -7,7 +7,7 @@ use std::io::{self, IsTerminal, Write};
 use serde::Serialize;
 use uuid::Uuid;
 
-use crate::error::ReceiptsError;
+use crate::error::{PartialData, ReceiptsError};
 
 fn new_request_id(request_id: Option<String>) -> String {
     request_id.unwrap_or_else(|| Uuid::new_v4().to_string())
@@ -37,21 +37,21 @@ pub struct Diagnostics {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SuccessEnvelope {
+pub struct SuccessEnvelope<T> {
     pub schema: String,
     pub ok: bool,
     pub command: String,
     pub request_id: String,
-    pub data: serde_json::Value,
+    pub data: T,
     pub cost_dollars: CostDollars,
     pub budget: Budget,
     pub diagnostics: Diagnostics,
 }
 
-impl SuccessEnvelope {
+impl<T> SuccessEnvelope<T> {
     pub fn new(
         command: impl Into<String>,
-        data: serde_json::Value,
+        data: T,
         cost_dollars: CostDollars,
         budget: Budget,
         diagnostics: Diagnostics,
@@ -78,7 +78,7 @@ pub struct ErrorDetail {
     pub retryable: bool,
     pub provider: Option<String>,
     pub message: String,
-    pub partial: Option<serde_json::Value>,
+    pub partial: Option<PartialData>,
     pub suggested_fix: Option<String>,
 }
 
@@ -125,7 +125,7 @@ impl ErrorEnvelope {
 
 /// Prints the success envelope. Human-readable text when stdout is a TTY and
 /// JSON wasn't forced; compact JSON otherwise (piped, or `--json`/`force_json`).
-pub fn emit_success(env: &SuccessEnvelope, force_json: bool) {
+pub fn emit_success<T: Serialize>(env: &SuccessEnvelope<T>, force_json: bool) {
     let stdout = io::stdout();
     if !force_json && stdout.is_terminal() {
         render_success_human(env);
@@ -156,7 +156,7 @@ pub fn emit_error(env: &ErrorEnvelope, force_json: bool) -> i32 {
     env.exit_code
 }
 
-fn render_success_human(env: &SuccessEnvelope) {
+fn render_success_human<T: Serialize>(env: &SuccessEnvelope<T>) {
     println!(
         "receipts {} — ok (requestId {})",
         env.command, env.request_id
@@ -254,7 +254,7 @@ mod tests {
         let err = ReceiptsError::rate_limit("Cerebras returned 429")
             .with_provider(Provider::Cerebras)
             .with_retryable(true)
-            .with_partial(serde_json::json!({"claims": []}))
+            .with_partial(PartialData::default())
             .with_suggested_fix("wait and retry; Cerebras rate windows are minute-scale");
 
         let env = ErrorEnvelope::from_error("ask", &err, Some(FIXED_REQUEST_ID.to_string()));
@@ -279,7 +279,6 @@ mod tests {
         );
 
         assert!(json.get("request_id").is_none());
-        // exit_code is intentionally not part of the JSON contract.
         assert!(json.get("exitCode").is_none());
         assert!(json.get("exit_code").is_none());
 

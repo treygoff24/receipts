@@ -4,8 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Provider, ReceiptsError};
 use crate::providers::{
-    HttpFailure, SharedSpend, SleepFn, USER_AGENT, default_sleep, http_agent, join_url, new_spend,
-    run_with_retries,
+    HttpFailure, SharedSpend, USER_AGENT, http_agent, join_url, new_spend, run_with_retries,
 };
 
 pub const DEFAULT_BASE_URL: &str = "https://api.exa.ai";
@@ -29,7 +28,6 @@ pub struct ExaClient {
     search_type: String,
     agent: ureq::Agent,
     spend: SharedSpend,
-    sleep_fn: SleepFn,
 }
 
 #[derive(Serialize)]
@@ -66,7 +64,6 @@ impl ExaClient {
             search_type: crate::config::DEFAULT_EXA_SEARCH_TYPE.to_string(),
             agent: http_agent(),
             spend: new_spend(),
-            sleep_fn: default_sleep(),
         }
     }
 
@@ -77,14 +74,6 @@ impl ExaClient {
 
     pub fn with_spend(mut self, spend: SharedSpend) -> Self {
         self.spend = spend;
-        self
-    }
-
-    pub fn with_sleep_fn(
-        mut self,
-        sleep_fn: impl Fn(std::time::Duration) + Send + Sync + 'static,
-    ) -> Self {
-        self.sleep_fn = Arc::new(sleep_fn);
         self
     }
 
@@ -102,14 +91,24 @@ impl ExaClient {
             num_results: 1,
             contents: None,
         };
+        self.request("/search", &body, "probe")?;
+        Ok(())
+    }
+
+    fn request(
+        &self,
+        path: &str,
+        body: &impl Serialize,
+        operation: &str,
+    ) -> Result<RawExaResponse, ReceiptsError> {
         let (raw, retries) = run_with_retries(
             Provider::Exa,
-            || self.post_json("/search", &body),
-            self.sleep_fn.as_ref(),
+            || self.post_json(path, body),
+            &std::thread::sleep,
         )?;
-        let response = parse_response(&raw, "probe")?;
+        let response = parse_response(&raw, operation)?;
         self.record_search_spend(response.cost_dollars.total(), retries)?;
-        Ok(())
+        Ok(response)
     }
 
     fn post_json(&self, path: &str, body: &impl Serialize) -> Result<String, HttpFailure> {
@@ -148,14 +147,7 @@ impl SearchProvider for ExaClient {
             num_results: 4,
             contents: Some(SearchContents { text: true }),
         };
-        let (raw, retries) = run_with_retries(
-            Provider::Exa,
-            || self.post_json("/search", &body),
-            self.sleep_fn.as_ref(),
-        )?;
-        let response = parse_response(&raw, "search")?;
-
-        self.record_search_spend(response.cost_dollars.total(), retries)?;
+        let response = self.request("/search", &body, "search")?;
         Ok(response.results.into_iter().map(SourceDoc::from).collect())
     }
 
@@ -164,23 +156,15 @@ impl SearchProvider for ExaClient {
             urls: [url],
             text: true,
         };
-        let (raw, retries) = run_with_retries(
-            Provider::Exa,
-            || self.post_json("/contents", &body),
-            self.sleep_fn.as_ref(),
-        )?;
-        let response = parse_response(&raw, "contents")?;
-
-        self.record_search_spend(response.cost_dollars.total(), retries)?;
+        let response = self.request("/contents", &body, "contents")?;
         Ok(response.results.into_iter().find_map(|result| result.text))
     }
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Deserialize)]
 struct RawExaResponse {
-    #[serde(default)]
     results: Vec<RawExaResult>,
-    #[serde(default, rename = "costDollars")]
+    #[serde(rename = "costDollars")]
     cost_dollars: RawCostDollars,
 }
 
@@ -192,14 +176,14 @@ fn parse_response(raw: &str, operation: &str) -> Result<RawExaResponse, Receipts
     })
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Deserialize)]
 struct RawCostDollars {
-    total: Option<f64>,
+    total: f64,
 }
 
 impl RawCostDollars {
     fn total(&self) -> f64 {
-        self.total.unwrap_or_default()
+        self.total
     }
 }
 
@@ -281,6 +265,11 @@ mod tests {
                 text: "Body".into(),
             }]
         );
+    }
+
+    #[test]
+    fn rejects_responses_without_metered_cost() {
+        assert!(parse_response(r#"{"results":[]}"#, "search").is_err());
     }
 
     #[test]

@@ -2,7 +2,7 @@ use std::env;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use serde_json::{json, to_value};
+use serde::Serialize;
 
 use crate::budget::Budget as RunBudget;
 use crate::cli::{AskArgs, DepthArg, GlobalArgs, VerifyArg};
@@ -10,7 +10,7 @@ use crate::commands::CommandSuccess;
 use crate::config::Config;
 use crate::envelope::{Budget, CostDollars, Diagnostics, SuccessEnvelope};
 use crate::error::{Provider, ReceiptsError};
-use crate::pipeline::{self, RunParams};
+use crate::pipeline::{self, Outcome, ResearchData, RunParams};
 use crate::providers::cerebras::CerebrasClient;
 use crate::providers::exa::{DEFAULT_BASE_URL as EXA_DEFAULT_BASE_URL, ExaClient};
 use crate::providers::{SharedSpend, new_spend};
@@ -20,7 +20,45 @@ use crate::tiers::{
     VERIFICATION_WORST_CASE_COST, WORKER_ROUND_WORST_CASE_COST,
 };
 
-pub fn run(global: &GlobalArgs, args: &AskArgs) -> Result<CommandSuccess, ReceiptsError> {
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+pub enum AskData {
+    Research(ResearchResponse),
+    DryRun(DryRunData),
+}
+
+#[derive(Debug, Serialize)]
+pub struct ResearchResponse {
+    #[serde(flatten)]
+    data: ResearchData,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    brief: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DryRunData {
+    question: String,
+    outcome: Outcome,
+    dry_run: bool,
+    planned_fanout: PlannedFanout,
+    projected_cost: f64,
+    projected_worst_case_cost: f64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PlannedFanout {
+    tier: &'static str,
+    workers: usize,
+    decompose_calls: usize,
+    max_worker_rounds: usize,
+    verify: &'static str,
+    refinement_pass: bool,
+    note: &'static str,
+}
+
+pub fn run(global: &GlobalArgs, args: &AskArgs) -> Result<CommandSuccess<AskData>, ReceiptsError> {
     let question = args.question.join(" ");
     let question = question.trim();
     if question.is_empty() {
@@ -56,7 +94,7 @@ pub fn run(global: &GlobalArgs, args: &AskArgs) -> Result<CommandSuccess, Receip
         Arc::clone(&spend),
     );
 
-    let data = pipeline::run(
+    let mut data = pipeline::run(
         question,
         global.depth,
         global.verify,
@@ -65,9 +103,7 @@ pub fn run(global: &GlobalArgs, args: &AskArgs) -> Result<CommandSuccess, Receip
         &search,
         params,
     )?;
-    let mut data_value = to_value(&data).map_err(|err| {
-        ReceiptsError::upstream(format!("failed to serialize research data: {err}"))
-    })?;
+    let mut brief = None;
     if global.brief {
         let brief_params = RunParams::new(
             today_string(),
@@ -76,25 +112,15 @@ pub fn run(global: &GlobalArgs, args: &AskArgs) -> Result<CommandSuccess, Receip
         );
         match pipeline::synthesize_brief(&data, &chat, &search, &budget, &brief_params) {
             Ok(Some(text)) => {
-                data_value["brief"] = json!(text);
+                brief = Some(text);
             }
             Ok(None) => {
-                // Budget gate refused the synthesis call — omit the field with
-                // an uncertainty note, matching brief.rs behavior.
-                if let Some(uncertainties) = data_value
-                    .get_mut("uncertainties")
-                    .and_then(|u| u.as_array_mut())
-                {
-                    uncertainties.push(json!("brief omitted: budget gate refused synthesis call"));
-                }
+                // Budget refusal is a soft failure; preserve it as an uncertainty.
+                data.uncertainties
+                    .push("brief omitted: budget gate refused synthesis call".to_string());
             }
             Err(err) => {
-                if let Some(uncertainties) = data_value
-                    .get_mut("uncertainties")
-                    .and_then(|u| u.as_array_mut())
-                {
-                    uncertainties.push(json!(format!("brief failed: {err}")));
-                }
+                data.uncertainties.push(format!("brief failed: {err}"));
             }
         }
     }
@@ -103,7 +129,7 @@ pub fn run(global: &GlobalArgs, args: &AskArgs) -> Result<CommandSuccess, Receip
     let exit_code = if budget.hit().is_some() { 10 } else { 0 };
     let envelope = SuccessEnvelope::new(
         "ask",
-        data_value,
+        AskData::Research(ResearchResponse { data, brief }),
         cost,
         Budget {
             hit: budget.hit().map(str::to_string),
@@ -122,7 +148,7 @@ pub fn run(global: &GlobalArgs, args: &AskArgs) -> Result<CommandSuccess, Receip
     })
 }
 
-fn dry_run(global: &GlobalArgs, question: &str) -> Result<CommandSuccess, ReceiptsError> {
+fn dry_run(global: &GlobalArgs, question: &str) -> Result<CommandSuccess<AskData>, ReceiptsError> {
     let depth = global.depth;
     let worker_count = match global.depth {
         DepthArg::Quick => 2,
@@ -135,8 +161,7 @@ fn dry_run(global: &GlobalArgs, question: &str) -> Result<CommandSuccess, Receip
         VerifyArg::Paranoid => 3.0,
         VerifyArg::Off => 0.0,
     };
-    // The relevance gate runs once per claim candidate whenever verification
-    // itself is enabled (it's skipped, same as verify, under `--verify off`).
+    // `--verify off` skips both relevance and source verification.
     let relevance_multiplier = if global.verify == VerifyArg::Off {
         0.0
     } else {
@@ -147,12 +172,8 @@ fn dry_run(global: &GlobalArgs, question: &str) -> Result<CommandSuccess, Receip
     // validated prototype); MAX_ROUNDS only burns when sources keep failing.
     let expected_rounds = 1.0;
 
-    // The relevance gate and verifier each run once PER EXTRACTED CLAIM, not
-    // once per worker — a worker's answer can extract up to
-    // MAX_CLAIMS_PER_WORKER claims (see extract::extract_claims). Worst case
-    // projects the full cap; the expected case uses a documented, smaller
-    // assumption (EXPECTED_CLAIMS_PER_WORKER) since most answers cite only a
-    // handful of atomic claims.
+    // Both gates charge per extracted claim, not per worker. Use the prompt cap
+    // for worst case and the empirical assumption for expected cost.
     let max_claims_per_worker = MAX_CLAIMS_PER_WORKER as f64;
     let expected_claims_per_worker = EXPECTED_CLAIMS_PER_WORKER as f64;
 
@@ -179,10 +200,7 @@ fn dry_run(global: &GlobalArgs, question: &str) -> Result<CommandSuccess, Receip
             * verification_multiplier
             * VERIFICATION_WORST_CASE_COST;
 
-    // Refinement pass (Deep only): worst case all subquestions are dead and
-    // get a second worker round, PLUS a second extract/relevance/verify pass
-    // over the refined claims — up to `worker_count` additional units of
-    // each.
+    // Deep's worst case retries every dead subquestion through the full pipeline.
     let refinement_note = if global.depth == DepthArg::Deep {
         "worst case incl. refinement"
     } else {
@@ -203,7 +221,6 @@ fn dry_run(global: &GlobalArgs, question: &str) -> Result<CommandSuccess, Receip
         0.0
     };
 
-    // Keep projected search units aligned with live metering.
     let search_projected =
         worker_count as f64 * max_rounds * crate::tiers::SEARCH_CALL_WORST_CASE_COST
             + worker_count as f64 * CONTENTS_WORST_CASE_COST;
@@ -212,28 +229,27 @@ fn dry_run(global: &GlobalArgs, question: &str) -> Result<CommandSuccess, Receip
             + worker_count as f64 * CONTENTS_WORST_CASE_COST;
 
     let total_projected = model_projected + refinement_projected + search_projected;
-    // Expected case: single round per worker, no refinement pass fires.
     let total_expected = model_expected + search_expected;
 
-    let data = json!({
-        "question": question,
-        "outcome": "answered",
-        "dryRun": true,
-        "plannedFanout": {
-            "tier": depth_name(global.depth),
-            "workers": worker_count,
-            "decomposeCalls": decompose_calls,
-            "maxWorkerRounds": crate::pipeline::worker::MAX_ROUNDS,
-            "verify": verify_name(global.verify),
-            "refinementPass": global.depth == DepthArg::Deep,
-            "note": refinement_note
+    let data = DryRunData {
+        question: question.to_string(),
+        outcome: Outcome::Answered,
+        dry_run: true,
+        planned_fanout: PlannedFanout {
+            tier: depth_name(global.depth),
+            workers: worker_count,
+            decompose_calls,
+            max_worker_rounds: crate::pipeline::worker::MAX_ROUNDS,
+            verify: verify_name(global.verify),
+            refinement_pass: global.depth == DepthArg::Deep,
+            note: refinement_note,
         },
-        "projectedCost": total_expected,
-        "projectedWorstCaseCost": total_projected
-    });
+        projected_cost: total_expected,
+        projected_worst_case_cost: total_projected,
+    };
     let envelope = SuccessEnvelope::new(
         "ask",
-        data,
+        AskData::DryRun(data),
         CostDollars {
             model: model_expected,
             search: search_expected,
@@ -295,9 +311,7 @@ pub(crate) fn require_key(
 }
 
 pub(crate) fn exa_base_url() -> String {
-    env::var("RECEIPTS_EXA_BASE")
-        .or_else(|_| env::var("EXA_API_BASE"))
-        .unwrap_or_else(|_| EXA_DEFAULT_BASE_URL.to_string())
+    env::var("RECEIPTS_EXA_BASE").unwrap_or_else(|_| EXA_DEFAULT_BASE_URL.to_string())
 }
 
 pub(crate) fn depth_name(depth: DepthArg) -> &'static str {

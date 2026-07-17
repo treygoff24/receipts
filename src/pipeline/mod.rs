@@ -13,6 +13,7 @@ use crate::tiers::{
     dead_subquestions, initial_worker_tasks, refinement_tasks,
 };
 
+use shared::append_note;
 pub use shared::{
     ChatProvider, Outcome, Relevance, ResearchClaim, ResearchData, RunParams, SearchTrailEntry,
     SourceCache, Verdict,
@@ -189,11 +190,7 @@ fn sanitize_claim_source_url(mut claim: ResearchClaim) -> ResearchClaim {
     }
     if !trimmed.is_empty() {
         let addition = format!("source: {trimmed} (no URL)");
-        claim.note = if claim.note.trim().is_empty() {
-            addition
-        } else {
-            format!("{} | {}", claim.note, addition)
-        };
+        append_note(&mut claim.note, &addition);
     }
     claim
 }
@@ -212,11 +209,6 @@ fn parse_http_url(raw: &str) -> Option<String> {
     Some(parsed.to_string())
 }
 
-/// Thin pub wrapper that runs `brief::synthesize_brief` with the same
-/// chat/budget/spend the run used. Returns:
-/// - `Ok(Some(text))` on success,
-/// - `Ok(None)` when the budget gate refused the synthesis chat call,
-/// - `Err(_)` on an upstream chat failure.
 pub fn synthesize_brief(
     data: &ResearchData,
     chat: &dyn ChatProvider,
@@ -422,7 +414,7 @@ pub(crate) mod test_support {
                 .lock()
                 .unwrap()
                 .pop_front()
-                .unwrap_or_else(|| Ok(text_response("")))
+                .expect("scripted chat response")
         }
     }
 
@@ -557,7 +549,6 @@ mod tests {
         ]);
         let search = FakeSearch::default();
         let budget = Budget::new(None, None);
-        // concurrency=1 so candidates are verified sequentially in order.
         let params = RunParams::new("2026-07-01", 1, new_spend());
         let ctx = StageContext::new(&chat, &search, &budget, &params);
         ctx.state

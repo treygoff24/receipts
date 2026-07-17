@@ -33,7 +33,7 @@ impl MockServer {
                     Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
                         thread::sleep(Duration::from_millis(5));
                     }
-                    Err(_) => break,
+                    Err(err) => panic!("mock server accept failed: {err}"),
                 }
             }
         });
@@ -58,17 +58,14 @@ impl MockServer {
 impl Drop for MockServer {
     fn drop(&mut self) {
         self.running.store(false, Ordering::SeqCst);
-        let _ = TcpStream::connect(self.base_url.trim_start_matches("http://"));
         if let Some(handle) = self.handle.take() {
-            let _ = handle.join();
+            handle.join().expect("mock server thread");
         }
     }
 }
 
 fn handle_client(mut stream: TcpStream) {
-    let Ok((path, body, headers)) = read_request(&mut stream) else {
-        return;
-    };
+    let (path, body, headers) = read_request(&mut stream).expect("mock request");
     let response = match path.as_str() {
         "/chat/completions" => chat_response(&body),
         "/search" => search_response(&headers),
@@ -96,23 +93,25 @@ fn read_request(stream: &mut TcpStream) -> std::io::Result<(String, String, Stri
         .windows(4)
         .position(|window| window == b"\r\n\r\n")
         .map(|idx| idx + 4)
-        .unwrap_or(buf.len());
-    let headers = String::from_utf8_lossy(&buf[..header_end]).to_string();
+        .expect("mock request header terminator");
+    let headers =
+        String::from_utf8(buf[..header_end].to_vec()).expect("mock request headers UTF-8");
     let path = headers
         .lines()
         .next()
         .and_then(|line| line.split_whitespace().nth(1))
-        .unwrap_or("/")
+        .expect("mock request path")
         .to_string();
     let content_length = headers
         .lines()
         .find_map(|line| {
             let (name, value) = line.split_once(':')?;
             name.eq_ignore_ascii_case("content-length")
-                .then(|| value.trim().parse::<usize>().ok())
-                .flatten()
+                .then_some(value.trim())
         })
-        .unwrap_or(0);
+        .expect("mock request content-length")
+        .parse::<usize>()
+        .expect("mock request content-length integer");
 
     while buf.len() < header_end + content_length {
         let n = stream.read(&mut tmp)?;
@@ -121,12 +120,13 @@ fn read_request(stream: &mut TcpStream) -> std::io::Result<(String, String, Stri
         }
         buf.extend_from_slice(&tmp[..n]);
     }
-    let body = String::from_utf8_lossy(&buf[header_end..header_end + content_length]).to_string();
+    let body = String::from_utf8(buf[header_end..header_end + content_length].to_vec())
+        .expect("mock request body UTF-8");
     Ok((path, body, headers))
 }
 
 fn chat_response(body: &str) -> (u16, Value) {
-    let body: Value = serde_json::from_str(body).unwrap_or_else(|_| json!({}));
+    let body: Value = serde_json::from_str(body).expect("mock chat request JSON");
     let schema_name = body
         .pointer("/response_format/json_schema/name")
         .and_then(Value::as_str);
@@ -171,8 +171,6 @@ fn chat_response(body: &str) -> (u16, Value) {
 }
 
 fn search_response(headers: &str) -> (u16, Value) {
-    // Simulate a 401 when the Exa API key is "bad-exa" (used by doctor
-    // --online bad-key tests).
     let bad_key = headers
         .lines()
         .any(|line| line.eq_ignore_ascii_case("x-api-key: bad-exa"));
@@ -215,5 +213,7 @@ fn write_json(stream: &mut TcpStream, status: u16, value: &Value) {
         "HTTP/1.1 {status} {reason}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
         body.len()
     );
-    let _ = stream.write_all(response.as_bytes());
+    stream
+        .write_all(response.as_bytes())
+        .expect("mock response write");
 }

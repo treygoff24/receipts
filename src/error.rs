@@ -2,13 +2,20 @@
 //! context (provider, retryability, partial pipeline output) to populate the
 //! `receipts.cli.error.v1` envelope (see `envelope.rs`) without re-deriving it.
 
-use serde_json::Value;
+use serde::Serialize;
+
+use crate::pipeline::ResearchClaim;
 
 /// Which upstream API an error originated from, if any.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Provider {
     Cerebras,
     Exa,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct PartialData {
+    pub claims: Vec<ResearchClaim>,
 }
 
 impl Provider {
@@ -32,7 +39,7 @@ impl std::fmt::Display for Provider {
 pub struct ErrorContext {
     provider: Option<Provider>,
     retryable: bool,
-    partial: Option<Value>,
+    partial: Option<PartialData>,
     suggested_fix: Option<String>,
 }
 
@@ -152,7 +159,7 @@ impl ReceiptsError {
     }
 
     #[must_use]
-    pub fn with_partial(mut self, partial: Value) -> Self {
+    pub fn with_partial(mut self, partial: PartialData) -> Self {
         self.context_mut().partial = Some(partial);
         self
     }
@@ -171,7 +178,7 @@ impl ReceiptsError {
         self.context().retryable
     }
 
-    pub fn partial_data(&self) -> Option<&Value> {
+    pub fn partial_data(&self) -> Option<&PartialData> {
         self.context().partial.as_ref()
     }
 
@@ -243,11 +250,11 @@ mod tests {
         let err = ReceiptsError::network("timed out")
             .with_provider(Provider::Cerebras)
             .with_retryable(true)
-            .with_partial(serde_json::json!({"claims": []}));
+            .with_partial(PartialData::default());
 
         assert_eq!(err.provider(), Some(Provider::Cerebras));
         assert!(err.is_retryable());
-        assert_eq!(err.partial_data(), Some(&serde_json::json!({"claims": []})));
+        assert_eq!(err.partial_data(), Some(&PartialData::default()));
         assert_eq!(err.to_string(), "network error: timed out");
     }
 

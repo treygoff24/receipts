@@ -5,20 +5,21 @@ pub mod schema;
 
 use clap::Parser;
 use clap::error::ErrorKind;
+use serde::Serialize;
 
 use crate::cli::{Cli, Commands, args_with_default_ask, edit_distance};
 use crate::envelope::{
     Budget, CostDollars, Diagnostics, ErrorEnvelope, SuccessEnvelope, emit_error, emit_success,
 };
 
-pub struct CommandSuccess {
-    pub envelope: SuccessEnvelope,
+pub struct CommandSuccess<T> {
+    pub envelope: SuccessEnvelope<T>,
     pub exit_code: i32,
     pub hint: Option<&'static str>,
 }
 
-impl CommandSuccess {
-    fn free(command: &'static str, data: serde_json::Value) -> Self {
+impl<T> CommandSuccess<T> {
+    pub(crate) fn free(command: &'static str, data: T) -> Self {
         Self {
             envelope: SuccessEnvelope::new(
                 command,
@@ -42,6 +43,11 @@ impl CommandSuccess {
     }
 }
 
+#[derive(Serialize)]
+struct TextData {
+    text: String,
+}
+
 pub fn run() -> i32 {
     let raw_args: Vec<std::ffi::OsString> = std::env::args_os().collect();
     let force_json = raw_args.iter().any(|arg| arg == "--json");
@@ -61,8 +67,7 @@ pub fn run() -> i32 {
                 } else {
                     "help"
                 };
-                let envelope =
-                    CommandSuccess::free(command, serde_json::json!({"text": text})).envelope;
+                let envelope = CommandSuccess::free(command, TextData { text }).envelope;
                 emit_success(&envelope, true);
                 return 0;
             }
@@ -72,7 +77,21 @@ pub fn run() -> i32 {
     };
 
     let command_name = command_name(&cli.command);
-    match dispatch(cli) {
+    let Cli { global, command } = cli;
+    match command {
+        Commands::Ask(args) => finish(command_name, force_json, ask::run(&global, &args)),
+        Commands::Doctor(args) => finish(command_name, force_json, doctor::run(&global, &args)),
+        Commands::Capabilities => finish(command_name, force_json, capabilities::run(&global)),
+        Commands::Schema(args) => finish(command_name, force_json, schema::run(&global, &args)),
+    }
+}
+
+fn finish<T: Serialize>(
+    command_name: &'static str,
+    force_json: bool,
+    result: Result<CommandSuccess<T>, crate::error::ReceiptsError>,
+) -> i32 {
+    match result {
         Ok(success) => {
             emit_success(
                 &success.envelope,
@@ -90,16 +109,6 @@ pub fn run() -> i32 {
             let envelope = ErrorEnvelope::from_error(command_name, &err, None);
             emit_error(&envelope, force_json)
         }
-    }
-}
-
-fn dispatch(cli: Cli) -> Result<CommandSuccess, crate::error::ReceiptsError> {
-    let global = cli.global;
-    match cli.command {
-        Commands::Ask(args) => ask::run(&global, &args),
-        Commands::Doctor(args) => doctor::run(&global, &args),
-        Commands::Capabilities => capabilities::run(&global),
-        Commands::Schema(args) => schema::run(&global, &args),
     }
 }
 

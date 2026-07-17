@@ -1,23 +1,41 @@
+use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::cli::{GlobalArgs, SchemaArgs, SchemaTarget};
 use crate::commands::CommandSuccess;
 use crate::error::ReceiptsError;
 
-pub fn run(_global: &GlobalArgs, args: &SchemaArgs) -> Result<CommandSuccess, ReceiptsError> {
+#[derive(Serialize)]
+#[serde(transparent)]
+pub struct SchemaDocument(Value);
+
+#[derive(Serialize)]
+#[serde(untagged)]
+pub enum SchemaData {
+    Document(SchemaDocument),
+    All {
+        response: SchemaDocument,
+        error: SchemaDocument,
+    },
+}
+
+pub fn run(
+    _global: &GlobalArgs,
+    args: &SchemaArgs,
+) -> Result<CommandSuccess<SchemaData>, ReceiptsError> {
     let data = match args.target {
-        SchemaTarget::Response => response_schema(),
-        SchemaTarget::Error => error_schema(),
-        SchemaTarget::All => json!({
-            "response": response_schema(),
-            "error": error_schema()
-        }),
+        SchemaTarget::Response => SchemaData::Document(response_schema()),
+        SchemaTarget::Error => SchemaData::Document(error_schema()),
+        SchemaTarget::All => SchemaData::All {
+            response: response_schema(),
+            error: error_schema(),
+        },
     };
     Ok(CommandSuccess::free("schema", data))
 }
 
-fn response_schema() -> Value {
-    json!({
+fn response_schema() -> SchemaDocument {
+    SchemaDocument(json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$id": "receipts.cli.response.v1",
         "type": "object",
@@ -169,11 +187,11 @@ fn response_schema() -> Value {
             "budget": {"type": "object", "required": ["hit"], "properties": {"hit": {"enum": ["dollars", "seconds", null]}}},
             "diagnostics": {"type": "object", "required": ["durationMs", "retries"], "properties": {"durationMs": {"type": "integer"}, "retries": {"type": "integer"}}}
         }
-    })
+    }))
 }
 
-fn error_schema() -> Value {
-    json!({
+fn error_schema() -> SchemaDocument {
+    SchemaDocument(json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$id": "receipts.cli.error.v1",
         "type": "object",
@@ -197,5 +215,5 @@ fn error_schema() -> Value {
                 }
             }
         }
-    })
+    }))
 }

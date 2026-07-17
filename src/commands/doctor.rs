@@ -2,7 +2,6 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use serde::Serialize;
-use serde_json::to_value;
 
 use crate::cli::{DoctorArgs, GlobalArgs};
 use crate::commands::CommandSuccess;
@@ -18,7 +17,7 @@ use crate::providers::new_spend;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct DoctorReport {
+pub struct DoctorReport {
     schema_version: &'static str,
     status: &'static str,
     summary: DoctorSummary,
@@ -55,7 +54,10 @@ struct Remediation {
     reversible: bool,
 }
 
-pub fn run(global: &GlobalArgs, args: &DoctorArgs) -> Result<CommandSuccess, ReceiptsError> {
+pub fn run(
+    global: &GlobalArgs,
+    args: &DoctorArgs,
+) -> Result<CommandSuccess<DoctorReport>, ReceiptsError> {
     let started = Instant::now();
     let cfg = Config::load()?;
     let spend = new_spend();
@@ -96,9 +98,7 @@ pub fn run(global: &GlobalArgs, args: &DoctorArgs) -> Result<CommandSuccess, Rec
     let retries = retries_from_spend(&spend)?;
     let envelope = SuccessEnvelope::new(
         "doctor",
-        to_value(report).map_err(|err| {
-            ReceiptsError::upstream(format!("failed to serialize doctor report: {err}"))
-        })?,
+        report,
         cost_from_spend(&spend, false)?,
         Budget { hit: None },
         Diagnostics {

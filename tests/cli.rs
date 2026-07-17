@@ -27,7 +27,6 @@ fn receipts_cmd(home: &PathBuf) -> Command {
         .env_remove("RECEIPTS_MODEL")
         .env_remove("RECEIPTS_API_BASE")
         .env_remove("RECEIPTS_EXA_BASE")
-        .env_remove("EXA_API_BASE")
         .env_remove("RECEIPTS_EXA_SEARCH_TYPE")
         .env_remove("RECEIPTS_MAX_CONCURRENCY");
     cmd
@@ -76,16 +75,8 @@ fn quick_ask_runs_against_mock_server_and_reports_metered_cost() {
     );
     assert!(stdout["data"]["searchTrail"].as_array().unwrap().len() >= 2);
 
-    // Spend-math derivation: quick tier = 2 workers, each does 1 search tool
-    // call then 1 text answer = 2 chat calls per worker (worker round + final
-    // answer). But the mock returns a tool_call on the first round, then a text
-    // answer on the second, so each worker = 2 chat calls. 2 workers × 2
-    // rounds + 2 extract = 6 chat calls; both workers extract the same claim
-    // and url, so dedup collapses it to 1 candidate before the relevance gate
-    // + verify each run once more: +1 relevance + 1 verify = 8 chat calls
-    // total; 2 search calls (one per worker). Each chat call: 1000 prompt +
-    // 1000 completion tokens at (2.15 + 2.70) / 1M = 0.00485. Each search
-    // call: 0.01.
+    // Dedup leaves one claim, so two workers produce eight billed chat calls:
+    // four worker rounds, two extractions, one relevance gate, and one verifier.
     let expected_model = 8.0 * 0.00485;
     let expected_search = 2.0 * 0.01;
     let expected_total = expected_model + expected_search;
@@ -280,21 +271,21 @@ fn exit_10_partial_on_budget_hit_with_zero_claims() {
 fn dry_run_quick_projection_matches_closed_form_sum() {
     let home = temp_home("dry-run-quick-projection");
 
-    let decompose_cost = 0.001_f64; // DECOMPOSE_WORST_CASE_COST
-    let worker_round_cost = 0.03_f64; // WORKER_ROUND_WORST_CASE_COST
-    let extract_cost = 0.01_f64; // EXTRACT_WORST_CASE_COST
-    let relevance_cost = 0.001_f64; // RELEVANCE_WORST_CASE_COST
-    let verify_cost = 0.002_f64; // VERIFICATION_WORST_CASE_COST
-    let contents_cost = 0.005_f64; // CONTENTS_WORST_CASE_COST
-    let search_call_cost = 0.01_f64; // SEARCH_CALL_WORST_CASE_COST
-    let max_claims = 15_f64; // MAX_CLAIMS_PER_WORKER
-    let expected_claims = 3_f64; // EXPECTED_CLAIMS_PER_WORKER
+    let decompose_cost = 0.001_f64;
+    let worker_round_cost = 0.03_f64;
+    let extract_cost = 0.01_f64;
+    let relevance_cost = 0.001_f64;
+    let verify_cost = 0.002_f64;
+    let contents_cost = 0.005_f64;
+    let search_call_cost = 0.01_f64;
+    let max_claims = 15_f64;
+    let expected_claims = 3_f64;
 
     let workers = 2_f64;
-    let max_rounds = 5_f64; // MAX_ROUNDS
-    let decompose_calls = 0_f64; // quick doesn't decompose
-    let verify_mult = 1.0_f64; // adaptive
-    let relevance_mult = 1.0_f64; // relevance gate runs whenever verify is enabled
+    let max_rounds = 5_f64;
+    let decompose_calls = 0_f64;
+    let verify_mult = 1.0_f64;
+    let relevance_mult = 1.0_f64;
 
     // Relevance and verify scale off claims-per-worker, not worker count: a
     // worker's extracted answer can produce up to MAX_CLAIMS_PER_WORKER
@@ -358,12 +349,12 @@ fn dry_run_deep_includes_refinement_pass() {
     let verify_cost = 0.002_f64;
     let contents_cost = 0.005_f64;
     let search_call_cost = 0.01_f64;
-    let max_claims = 15_f64; // MAX_CLAIMS_PER_WORKER
-    let expected_claims = 3_f64; // EXPECTED_CLAIMS_PER_WORKER
+    let max_claims = 15_f64;
+    let expected_claims = 3_f64;
 
     let workers = 8_f64;
     let max_rounds = 5_f64;
-    let decompose_calls = 1_f64; // deep decomposes
+    let decompose_calls = 1_f64;
     let verify_mult = 1.0_f64;
     let relevance_mult = 1.0_f64;
 
@@ -404,7 +395,6 @@ fn dry_run_deep_includes_refinement_pass() {
         "worst case incl. refinement"
     );
 
-    // Expected case: one round per worker, refinement never fires.
     let expected_rounds = 1_f64;
     let model_expected = decompose_calls * decompose_cost
         + workers * expected_rounds * worker_round_cost
@@ -524,8 +514,6 @@ fn brief_wired_to_pipeline_synthesis_against_mock() {
     assert_eq!(stdout["schema"], "receipts.cli.response.v1");
     assert_eq!(stdout["ok"], true);
     assert_eq!(stdout["data"]["outcome"], "answered");
-    // The brief field should be present (the mock returns "ok" for the
-    // synthesis chat call since it has no schema/tools).
     assert!(
         stdout["data"]["brief"].as_str().is_some(),
         "brief field must be present"

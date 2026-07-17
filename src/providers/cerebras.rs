@@ -6,8 +6,7 @@ use serde_json::json;
 
 use crate::error::{Provider, ReceiptsError};
 use crate::providers::{
-    HttpFailure, SharedSpend, SleepFn, USER_AGENT, default_sleep, http_agent, join_url, new_spend,
-    run_with_retries,
+    HttpFailure, SharedSpend, USER_AGENT, http_agent, join_url, new_spend, run_with_retries,
 };
 
 /// A chat-completions message.
@@ -103,11 +102,15 @@ struct MessageToolCallFunction {
     arguments: String,
 }
 
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct ChatOpts {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub max_completion_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<ToolDefinition>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub response_format: Option<ResponseFormat>,
 }
 
@@ -300,7 +303,6 @@ pub struct CerebrasClient {
     model: String,
     agent: ureq::Agent,
     spend: SharedSpend,
-    sleep_fn: SleepFn,
 }
 
 #[derive(Serialize)]
@@ -308,14 +310,8 @@ struct ChatRequest<'a> {
     model: &'a str,
     messages: &'a [Message],
     stream: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    temperature: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    max_completion_tokens: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tools: Option<Vec<ToolDefinition>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    response_format: Option<ResponseFormat>,
+    #[serde(flatten)]
+    opts: ChatOpts,
 }
 
 impl CerebrasClient {
@@ -326,20 +322,11 @@ impl CerebrasClient {
             model,
             agent: http_agent(),
             spend: new_spend(),
-            sleep_fn: default_sleep(),
         }
     }
 
     pub fn with_spend(mut self, spend: SharedSpend) -> Self {
         self.spend = spend;
-        self
-    }
-
-    pub fn with_sleep_fn(
-        mut self,
-        sleep_fn: impl Fn(std::time::Duration) + Send + Sync + 'static,
-    ) -> Self {
-        self.sleep_fn = Arc::new(sleep_fn);
         self
     }
 
@@ -358,7 +345,7 @@ impl CerebrasClient {
         let (raw, retries) = run_with_retries(
             Provider::Cerebras,
             || self.post_json(&url, &body),
-            self.sleep_fn.as_ref(),
+            &std::thread::sleep,
         )?;
         let mut response = parse_chat_response(&raw)?;
         response.wall_time_ms = start.elapsed().as_millis() as u64;
@@ -371,10 +358,7 @@ impl CerebrasClient {
             model: &self.model,
             messages,
             stream: false,
-            temperature: opts.temperature,
-            max_completion_tokens: opts.max_completion_tokens,
-            tools: opts.tools,
-            response_format: opts.response_format,
+            opts,
         }
     }
 
@@ -474,17 +458,22 @@ fn parse_chat_response(raw: &str) -> Result<ChatResponse, ReceiptsError> {
             .with_retryable(false)
     })?;
 
-    let message = response
+    let message = &response
         .choices
         .first()
-        .and_then(|choice| choice.message.as_ref());
+        .ok_or_else(|| {
+            ReceiptsError::upstream("Cerebras response contained no choices")
+                .with_provider(Provider::Cerebras)
+                .with_retryable(false)
+        })?
+        .message;
 
     Ok(ChatResponse {
-        content: message.and_then(|m| m.content.clone()).unwrap_or_default(),
-        tool_calls: message.map(tool_calls).unwrap_or_default(),
+        content: message.content.clone().unwrap_or_default(),
+        tool_calls: tool_calls(message),
         usage: TokenUsage {
-            prompt_tokens: response.usage.prompt_tokens.unwrap_or_default(),
-            completion_tokens: response.usage.completion_tokens.unwrap_or_default(),
+            prompt_tokens: response.usage.prompt_tokens,
+            completion_tokens: response.usage.completion_tokens,
         },
         wall_time_ms: 0,
     })
@@ -497,24 +486,22 @@ fn tool_calls(message: &RawMessage) -> Vec<ToolCall> {
         .unwrap_or_default()
         .iter()
         .map(|call| ToolCall {
-            id: call.id.clone().unwrap_or_default(),
-            function_name: call.function.name.clone().unwrap_or_default(),
-            arguments: call.function.arguments.clone().unwrap_or_default(),
+            id: call.id.clone(),
+            function_name: call.function.name.clone(),
+            arguments: call.function.arguments.clone(),
         })
         .collect()
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Deserialize)]
 struct RawChatResponse {
-    #[serde(default)]
     choices: Vec<RawChoice>,
-    #[serde(default)]
     usage: RawUsage,
 }
 
 #[derive(Debug, Deserialize)]
 struct RawChoice {
-    message: Option<RawMessage>,
+    message: RawMessage,
 }
 
 #[derive(Debug, Deserialize)]
@@ -525,20 +512,20 @@ struct RawMessage {
 
 #[derive(Debug, Deserialize)]
 struct RawToolCall {
-    id: Option<String>,
+    id: String,
     function: RawFunction,
 }
 
 #[derive(Debug, Deserialize)]
 struct RawFunction {
-    name: Option<String>,
-    arguments: Option<String>,
+    name: String,
+    arguments: String,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Deserialize)]
 struct RawUsage {
-    prompt_tokens: Option<u64>,
-    completion_tokens: Option<u64>,
+    prompt_tokens: u64,
+    completion_tokens: u64,
 }
 
 #[cfg(test)]
@@ -586,6 +573,20 @@ mod tests {
         assert_eq!(parsed.tool_calls[0].function_name, "search");
         assert_eq!(parsed.usage.prompt_tokens, 1000);
         assert_eq!(parsed.usage.completion_tokens, 2000);
+    }
+
+    #[test]
+    fn rejects_incomplete_chat_responses() {
+        assert!(
+            parse_chat_response(
+                r#"{"choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1}}"#
+            )
+            .is_err()
+        );
+        assert!(
+            parse_chat_response(r#"{"choices":[{"message":{"content":"ok"}}],"usage":{}}"#)
+                .is_err()
+        );
     }
 
     #[test]
@@ -646,6 +647,31 @@ mod tests {
     }
 
     #[test]
+    fn chat_request_flattens_options_into_the_wire_payload() {
+        let client = CerebrasClient::new("key".into(), "http://localhost".into(), "model".into());
+        let messages = [Message::user("hi")];
+        let body = client.request_body(
+            &messages,
+            ChatOpts {
+                temperature: Some(0.2),
+                max_completion_tokens: Some(100),
+                ..ChatOpts::default()
+            },
+        );
+
+        assert_eq!(
+            serde_json::to_value(body).unwrap(),
+            serde_json::json!({
+                "model": "model",
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream": false,
+                "temperature": 0.2,
+                "max_completion_tokens": 100
+            })
+        );
+    }
+
+    #[test]
     fn records_model_spend_into_shared_meter() {
         let spend = Arc::new(Mutex::new(Spend::default()));
         let client = CerebrasClient::new(
@@ -694,7 +720,6 @@ mod tests {
             .unwrap();
 
         let spend = spend.lock().unwrap();
-        // 1M * 0.35 + 1M * 0.75 = 1.10
         assert!((spend.dollars - 1.10).abs() < f64::EPSILON);
     }
 }

@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use serde::Deserialize;
 
 use crate::pipeline::shared::{
-    ClaimCandidate, Relevance, ResearchClaim, StageContext, Verdict, VerifiedClaim, chat_json,
-    run_chunked,
+    ClaimCandidate, Relevance, ResearchClaim, StageContext, Verdict, VerifiedClaim, append_note,
+    chat_json, run_chunked,
 };
 use crate::providers::cerebras::{ChatOpts, Message, ResponseFormat};
 use crate::tiers::{
@@ -341,14 +341,13 @@ fn judge(
         VerifyPolicy::Off => false,
     };
     if needs_more && policy == VerifyPolicy::Adaptive {
-        // Gate the +2 escalation judges. If the budget refuses, keep the
-        // single judge's verdict as-is (partial stands, no escalation).
+        // A refused escalation preserves the first partial vote.
         if ctx.may_launch(2.0 * VERIFICATION_WORST_CASE_COST) {
             votes.push(judge_once(candidate, source_text, ctx)?);
             votes.push(judge_once(candidate, source_text, ctx)?);
         }
     } else if needs_more {
-        // Paranoid: cost already projected at 3x in verify_candidates.
+        // Paranoid's three judges were budget-gated together in verify_candidates.
         votes.push(judge_once(candidate, source_text, ctx)?);
         votes.push(judge_once(candidate, source_text, ctx)?);
     }
@@ -433,15 +432,6 @@ fn resolve_quote(
     } else {
         append_note(note, "quote failed source-match validation");
         None
-    }
-}
-
-fn append_note(note: &mut String, addition: &str) {
-    if note.trim().is_empty() {
-        *note = addition.to_string();
-    } else {
-        note.push_str(" | ");
-        note.push_str(addition);
     }
 }
 
@@ -672,15 +662,11 @@ mod tests {
 
     #[test]
     fn adaptive_escalation_skipped_under_exhausted_budget() {
-        // Budget is enough for the single judge but NOT for the +2 escalation
-        // judges. The verdict stays partial (no escalation). Source text is
-        // pre-cached so the contents gate is not involved.
         let chat = ScriptedChat::new(vec![verdict("partial", "weak")]);
         let search = FakeSearch::default();
         let budget = Budget::new(Some(0.01), None);
         let params = RunParams::new("2026-07-01", 1, new_spend());
-        // Pre-load spend so: verify gate (0.002) passes (0.007+0.002=0.009<=0.01)
-        // but escalation gate (2*0.002=0.004) fails (0.007+0.004=0.011>0.01).
+        // At $0.007, the first judge reaches $0.009; escalation would exceed $0.01.
         {
             let mut spend = params.spend.lock().unwrap();
             spend.dollars = 0.007;

@@ -148,7 +148,7 @@ pub(crate) struct VerifiedClaim {
 pub(crate) struct SharedState {
     pub spend: SharedSpend,
     pub budget_gate: Arc<Mutex<()>>,
-    // lock order: source_cache before source_meta — keep it consistent to avoid deadlock.
+    // Lock source_cache before source_meta to avoid deadlock.
     pub source_cache: SourceCache,
     pub source_meta: SourceMetaCache,
     pub search_trail: Arc<Mutex<Vec<SearchTrailEntry>>>,
@@ -252,6 +252,15 @@ where
             let second = chat.chat(messages, opts)?;
             parse_model_json(&second.content)
         }
+    }
+}
+
+pub(crate) fn append_note(note: &mut String, addition: &str) {
+    if note.trim().is_empty() {
+        *note = addition.to_string();
+    } else {
+        note.push_str(" | ");
+        note.push_str(addition);
     }
 }
 

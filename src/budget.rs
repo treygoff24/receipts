@@ -45,7 +45,7 @@ impl Budget {
             .max_dollars
             .is_some_and(|cap| spend.total_dollars() + projected_unit_cost > cap)
         {
-            let _ = self.hit.set("dollars");
+            self.hit.set("dollars").expect("budget hit was unset");
             return false;
         }
 
@@ -53,7 +53,7 @@ impl Budget {
             .max_seconds
             .is_some_and(|cap| self.start.elapsed() > Duration::from_secs(cap))
         {
-            let _ = self.hit.set("seconds");
+            self.hit.set("seconds").expect("budget hit was unset");
             return false;
         }
 

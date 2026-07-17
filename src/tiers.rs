@@ -114,7 +114,7 @@ pub fn dead_subquestions(
     let mut emitted = HashSet::new();
     subquestions
         .iter()
-        .filter(|subquestion| !seen.get(subquestion.as_str()).copied().unwrap_or(false))
+        .filter(|subquestion| !seen[subquestion.as_str()])
         .filter(|subquestion| emitted.insert(subquestion.as_str()))
         .cloned()
         .collect()
