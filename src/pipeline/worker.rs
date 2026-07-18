@@ -18,6 +18,7 @@ pub struct WorkerAnswer {
 pub(crate) fn run_worker(
     task: WorkerTask,
     ctx: &StageContext<'_>,
+    provider_errors: &mut Vec<ReceiptsError>,
 ) -> Result<WorkerAnswer, ReceiptsError> {
     let mut messages = vec![
         Message::system(format!(
@@ -63,7 +64,7 @@ pub(crate) fn run_worker(
 
         messages.push(Message::assistant_tool_calls(&response.tool_calls));
         for call in response.tool_calls {
-            let content = run_tool_call(&call, ctx);
+            let content = run_tool_call(&call, ctx, provider_errors);
             messages.push(Message::tool(call.id, content));
         }
     }
@@ -75,7 +76,11 @@ pub(crate) fn run_worker(
     })
 }
 
-fn run_tool_call(call: &ToolCall, ctx: &StageContext<'_>) -> String {
+fn run_tool_call(
+    call: &ToolCall,
+    ctx: &StageContext<'_>,
+    provider_errors: &mut Vec<ReceiptsError>,
+) -> String {
     if call.function_name != "search" {
         return format!("unsupported tool: {}", call.function_name);
     }
@@ -92,7 +97,9 @@ fn run_tool_call(call: &ToolCall, ctx: &StageContext<'_>) -> String {
         }
         Err(err) => {
             record_trail(&query, 0, ctx);
-            format!("search failed: {err}")
+            let message = format!("search failed: {err}");
+            provider_errors.push(err);
+            message
         }
     }
 }
@@ -216,6 +223,7 @@ mod tests {
                 refinement: false,
             },
             &ctx,
+            &mut Vec::new(),
         )
         .unwrap();
 
@@ -267,6 +275,7 @@ mod tests {
                 refinement: false,
             },
             &ctx,
+            &mut Vec::new(),
         )
         .unwrap();
 

@@ -98,7 +98,7 @@ impl ExaClient {
         let (raw, retries) = run_with_retries(
             Provider::Exa,
             || self.post_json(path, body),
-            &std::thread::sleep,
+            &crate::providers::sleep_before_retry,
         )?;
         let response = parse_response(&raw, operation)?;
         self.record_search_spend(response.cost_dollars.total(), retries);

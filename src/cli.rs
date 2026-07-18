@@ -106,7 +106,7 @@ pub fn args_with_default_ask(args: impl IntoIterator<Item = OsString>) -> Vec<Os
     args
 }
 
-fn first_commandish_arg(args: &[OsString]) -> Option<usize> {
+pub(crate) fn first_commandish_arg(args: &[OsString]) -> Option<usize> {
     let mut idx = 1;
     while idx < args.len() {
         let token = args[idx].to_string_lossy();

@@ -18,6 +18,15 @@ const MAX_ATTEMPTS: usize = 6;
 /// 120s matches the measured prototype.
 pub(crate) const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 
+/// Keeps fault-injection integration tests fast without changing release behavior.
+pub(crate) fn sleep_before_retry(duration: Duration) {
+    #[cfg(debug_assertions)]
+    if std::env::var_os("RECEIPTS_TEST_NO_RETRY_SLEEP").is_some() {
+        return;
+    }
+    std::thread::sleep(duration);
+}
+
 pub(crate) fn http_agent() -> ureq::Agent {
     ureq::Agent::config_builder()
         .timeout_global(Some(REQUEST_TIMEOUT))
@@ -92,7 +101,10 @@ pub(crate) fn run_with_retries<T>(
                 if attempt + 1 == MAX_ATTEMPTS {
                     return Err(ReceiptsError::network(message)
                         .with_provider(provider)
-                        .with_retryable(true));
+                        .with_retryable(true)
+                        .with_suggested_fix(format!(
+                            "Check network connectivity and the {provider} endpoint, then retry with backoff."
+                        )));
                 }
                 retries += 1;
                 sleep(Duration::from_secs(2_u64.pow(attempt as u32)));
@@ -116,16 +128,28 @@ fn status_error(provider: Provider, status: u16) -> ReceiptsError {
     match status {
         401 | 403 => ReceiptsError::auth(message)
             .with_provider(provider)
-            .with_retryable(false),
+            .with_retryable(false)
+            .with_suggested_fix(format!(
+                "Check the {provider} API key, then retry the request."
+            )),
         429 => ReceiptsError::rate_limit(message)
             .with_provider(provider)
-            .with_retryable(true),
+            .with_retryable(true)
+            .with_suggested_fix(format!(
+                "Wait for the {provider} rate-limit window, then retry with backoff."
+            )),
         500..=599 => ReceiptsError::upstream(message)
             .with_provider(provider)
-            .with_retryable(true),
+            .with_retryable(true)
+            .with_suggested_fix(format!(
+                "Retry once; if it fails again, check the {provider} status page and report the outage."
+            )),
         _ => ReceiptsError::upstream(message)
             .with_provider(provider)
-            .with_retryable(false),
+            .with_retryable(false)
+            .with_suggested_fix(format!(
+                "Check the request and {provider} endpoint before retrying."
+            )),
     }
 }
 
@@ -185,6 +209,7 @@ mod tests {
         assert_eq!(err.code(), "rate_limited");
         assert_eq!(err.provider(), Some(Provider::Exa));
         assert!(err.is_retryable());
+        assert!(err.suggested_fix().is_some());
         assert_eq!(sleeps.lock().unwrap().len(), 5);
     }
 
@@ -260,6 +285,7 @@ mod tests {
         assert_eq!(calls, 6);
         assert_eq!(err.code(), "network");
         assert_eq!(err.provider(), Some(Provider::Exa));
+        assert!(err.suggested_fix().is_some());
         assert!(err.is_retryable());
         assert_eq!(
             *sleeps.lock().unwrap(),

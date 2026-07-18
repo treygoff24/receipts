@@ -64,10 +64,18 @@ fn read_file_config(path: &Path) -> Result<FileConfig, ReceiptsError> {
             "failed to read config file {}: {e}",
             path.display()
         ))
+        .with_suggested_fix(format!(
+            "Check that {} exists and is readable.",
+            path.display()
+        ))
     })?;
     toml::from_str(&text).map_err(|e| {
         ReceiptsError::config(format!(
             "failed to parse config file {}: {e}",
+            path.display()
+        ))
+        .with_suggested_fix(format!(
+            "Fix TOML syntax in {}; valid keys are cerebras_api_key, exa_api_key, model, api_base, max_concurrency, and exa_search_type.",
             path.display()
         ))
     })
@@ -99,6 +107,10 @@ impl Config {
         if !EXA_SEARCH_TYPES.contains(&exa_search_type.as_str()) {
             return Err(ReceiptsError::config(format!(
                 "invalid exa search type {exa_search_type:?}; expected one of: {}",
+                EXA_SEARCH_TYPES.join(", ")
+            ))
+            .with_suggested_fix(format!(
+                "Set RECEIPTS_EXA_SEARCH_TYPE or exa_search_type in ~/.config/receipts/config.toml to one of: {}.",
                 EXA_SEARCH_TYPES.join(", ")
             )));
         }
@@ -269,6 +281,10 @@ mod tests {
         let err = Config::load_from(None).unwrap_err();
         assert_eq!(err.exit_code(), 3);
         assert!(err.to_string().contains("warp-speed"));
+        assert!(
+            err.suggested_fix()
+                .is_some_and(|fix| fix.contains("fast, instant, auto"))
+        );
 
         clear_env();
     }
@@ -286,6 +302,28 @@ mod tests {
         let err = Config::load_from(Some(&path)).unwrap_err();
         assert_eq!(err.exit_code(), 3);
         assert_eq!(err.code(), "config");
+        assert!(
+            err.suggested_fix()
+                .is_some_and(|fix| fix.contains(path.to_str().unwrap()))
+        );
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn unreadable_config_path_names_the_file_in_suggested_fix() {
+        let _guard = env_lock().lock().unwrap();
+        clear_env();
+
+        let dir = std::env::temp_dir().join(format!("receipts-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+
+        let err = Config::load_from(Some(&dir)).unwrap_err();
+        assert_eq!(err.exit_code(), 3);
+        assert!(
+            err.suggested_fix()
+                .is_some_and(|fix| fix.contains(dir.to_str().unwrap()))
+        );
 
         fs::remove_dir_all(&dir).unwrap();
     }

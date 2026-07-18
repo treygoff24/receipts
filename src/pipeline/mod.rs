@@ -31,14 +31,22 @@ pub fn run(
 ) -> Result<ResearchData, ReceiptsError> {
     let ctx = StageContext::new(chat, search, budget, &params);
     let mut uncertainties = Vec::new();
+    let mut provider_errors = Vec::new();
 
-    let subquestions = prepare_subquestions(question, depth, &ctx, &mut uncertainties)?;
+    let subquestions = prepare_subquestions(
+        question,
+        depth,
+        &ctx,
+        &mut uncertainties,
+        &mut provider_errors,
+    )?;
     let mut answers = launch_workers(
         initial_worker_tasks(depth, question, subquestions.clone()),
         &ctx,
         &mut uncertainties,
+        &mut provider_errors,
     )?;
-    let mut candidates = extract_all(&answers, &ctx, &mut uncertainties);
+    let mut candidates = extract_all(&answers, &ctx, &mut uncertainties, &mut provider_errors);
     let mut verified = verify::gate_and_verify(candidates.clone(), question, verify_policy, &ctx);
 
     if depth == Depth::Deep {
@@ -58,10 +66,19 @@ pub fn run(
         let dead = dead_subquestions(&subquestions, &verdicts);
         if !dead.is_empty() {
             let refinement_start = answers.len();
-            let refinement_answers =
-                launch_workers(refinement_tasks(dead), &ctx, &mut uncertainties)?;
+            let refinement_answers = launch_workers(
+                refinement_tasks(dead),
+                &ctx,
+                &mut uncertainties,
+                &mut provider_errors,
+            )?;
             answers.extend(refinement_answers);
-            let refined = extract_all(&answers[refinement_start..], &ctx, &mut uncertainties);
+            let refined = extract_all(
+                &answers[refinement_start..],
+                &ctx,
+                &mut uncertainties,
+                &mut provider_errors,
+            );
             let start = candidates.len();
             candidates.extend(refined);
             let refined_verified = verify::gate_and_verify(
@@ -94,6 +111,12 @@ pub fn run(
     }
     uncertainties.extend(mechanical_uncertainties(&claims));
     let outcome = derive_outcome(&claims, budget.hit().is_some());
+
+    if claims.is_empty()
+        && let Some(err) = take_total_provider_failure(&mut provider_errors)
+    {
+        return Err(err);
+    }
 
     Ok(ResearchData {
         question: question.to_string(),
@@ -224,6 +247,7 @@ fn prepare_subquestions(
     depth: Depth,
     ctx: &StageContext<'_>,
     uncertainties: &mut Vec<String>,
+    provider_errors: &mut Vec<ReceiptsError>,
 ) -> Result<Vec<String>, ReceiptsError> {
     if !depth.needs_decompose() {
         return Ok(vec![question.to_string()]);
@@ -243,6 +267,7 @@ fn prepare_subquestions(
             uncertainties.push(format!(
                 "decomposition failed, using original question: {err}"
             ));
+            provider_errors.push(err);
             Ok(vec![question.to_string()])
         }
     }
@@ -283,6 +308,7 @@ fn launch_workers(
     tasks: Vec<crate::tiers::WorkerTask>,
     ctx: &StageContext<'_>,
     uncertainties: &mut Vec<String>,
+    provider_errors: &mut Vec<ReceiptsError>,
 ) -> Result<Vec<worker::WorkerAnswer>, ReceiptsError> {
     let mut out = Vec::new();
     let mut iter = tasks.into_iter();
@@ -306,9 +332,15 @@ fn launch_workers(
         }
 
         let results = run_chunked(batch, ctx.max_concurrency, |task| {
-            worker::run_worker(task, ctx)
+            let mut search_errors = Vec::new();
+            let answer = worker::run_worker(task, ctx, &mut search_errors);
+            (answer, search_errors)
         });
-        for result in results {
+        for (result, search_errors) in results {
+            for err in search_errors {
+                uncertainties.push(format!("worker failed: {err}"));
+                provider_errors.push(err);
+            }
             match result {
                 Ok(answer) => {
                     if answer.budget_stopped {
@@ -319,7 +351,10 @@ fn launch_workers(
                     }
                     out.push(answer);
                 }
-                Err(err) => uncertainties.push(format!("worker failed: {err}")),
+                Err(err) => {
+                    uncertainties.push(format!("worker failed: {err}"));
+                    provider_errors.push(err);
+                }
             }
         }
     }
@@ -327,10 +362,50 @@ fn launch_workers(
     Ok(out)
 }
 
+fn is_retryable_provider_failure(err: &ReceiptsError) -> bool {
+    err.provider().is_some() && err.is_retryable() && matches!(err.exit_code(), 4..=6)
+}
+
+fn take_total_provider_failure(errors: &mut Vec<ReceiptsError>) -> Option<ReceiptsError> {
+    if errors.is_empty() || !errors.iter().all(is_retryable_provider_failure) {
+        return None;
+    }
+
+    let counts = [
+        errors.iter().filter(|err| err.exit_code() == 4).count(),
+        errors.iter().filter(|err| err.exit_code() == 5).count(),
+        errors.iter().filter(|err| err.exit_code() == 6).count(),
+    ];
+    let max = *counts.iter().max().expect("three provider categories");
+    let dominant = if counts.iter().filter(|count| **count == max).count() == 1 {
+        counts.iter().position(|count| *count == max).unwrap() as i32 + 4
+    } else {
+        5
+    };
+
+    if let Some(index) = errors.iter().position(|err| err.exit_code() == dominant) {
+        return Some(errors.swap_remove(index));
+    }
+
+    let provider = errors[0].provider().expect("validated provider error");
+    Some(
+        ReceiptsError::upstream(format!(
+            "provider failures were tied: {} network, {} upstream, {} rate-limit",
+            counts[0], counts[1], counts[2]
+        ))
+        .with_provider(provider)
+        .with_retryable(true)
+        .with_suggested_fix(
+            "Retry once; if it fails again, check provider status pages and report the outage.",
+        ),
+    )
+}
+
 fn extract_all(
     answers: &[worker::WorkerAnswer],
     ctx: &StageContext<'_>,
     uncertainties: &mut Vec<String>,
+    provider_errors: &mut Vec<ReceiptsError>,
 ) -> Vec<ClaimCandidate> {
     let mut nested: Vec<Vec<ClaimCandidate>> = Vec::new();
     let mut iter = answers.iter();
@@ -355,7 +430,15 @@ fn extract_all(
         let results = run_chunked(batch, ctx.max_concurrency, |answer| {
             extract::extract_candidates(answer.clone(), ctx.chat)
         });
-        nested.extend(results);
+        for result in results {
+            match result {
+                Ok(candidates) => nested.push(candidates),
+                Err(err) => {
+                    uncertainties.push(format!("extraction failed: {err}"));
+                    provider_errors.push(err);
+                }
+            }
+        }
     }
     extract::dedup_candidates(nested.into_iter().flatten().collect())
 }
@@ -470,6 +553,7 @@ pub(crate) mod test_support {
 mod tests {
     use super::*;
     use crate::budget::Budget;
+    use crate::error::Provider;
     use crate::pipeline::test_support::{FakeSearch, ScriptedChat};
     use crate::providers::new_spend;
 
@@ -497,6 +581,34 @@ mod tests {
     }
 
     #[test]
+    fn provider_failure_classifier_uses_dominant_category_and_upstream_for_ties() {
+        let network = || {
+            ReceiptsError::network("offline")
+                .with_provider(Provider::Cerebras)
+                .with_retryable(true)
+        };
+        let rate_limit = || {
+            ReceiptsError::rate_limit("busy")
+                .with_provider(Provider::Exa)
+                .with_retryable(true)
+        };
+
+        let mut dominant_network = vec![network(), network(), rate_limit()];
+        assert_eq!(
+            take_total_provider_failure(&mut dominant_network)
+                .unwrap()
+                .exit_code(),
+            4
+        );
+
+        let mut tied = vec![network(), rate_limit()];
+        let err = take_total_provider_failure(&mut tied).unwrap();
+        assert_eq!(err.exit_code(), 5);
+        assert!(err.is_retryable());
+        assert!(err.provider().is_some());
+    }
+
+    #[test]
     fn decompose_budget_refusal_falls_back_to_original_question() {
         let chat = ScriptedChat::new(Vec::new());
         let search = FakeSearch::default();
@@ -504,9 +616,16 @@ mod tests {
         let params = RunParams::new("2026-07-01", 2, new_spend());
         let ctx = StageContext::new(&chat, &search, &budget, &params);
         let mut uncertainties = Vec::new();
+        let mut provider_errors = Vec::new();
 
-        let subquestions =
-            prepare_subquestions("question", Depth::Standard, &ctx, &mut uncertainties).unwrap();
+        let subquestions = prepare_subquestions(
+            "question",
+            Depth::Standard,
+            &ctx,
+            &mut uncertainties,
+            &mut provider_errors,
+        )
+        .unwrap();
 
         assert_eq!(subquestions, vec!["question".to_string()]);
         assert!(
@@ -528,6 +647,7 @@ mod tests {
         let params = RunParams::new("2026-07-01", 2, new_spend());
         let ctx = StageContext::new(&chat, &search, &budget, &params);
         let mut uncertainties = Vec::new();
+        let mut provider_errors = Vec::new();
 
         let answers = vec![worker::WorkerAnswer {
             subquestion: "subq".to_string(),
@@ -535,7 +655,7 @@ mod tests {
             budget_stopped: false,
         }];
 
-        let candidates = extract_all(&answers, &ctx, &mut uncertainties);
+        let candidates = extract_all(&answers, &ctx, &mut uncertainties, &mut provider_errors);
 
         assert!(candidates.is_empty());
         assert!(

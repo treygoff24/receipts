@@ -14,8 +14,27 @@ pub(crate) struct MockServer {
     handle: Option<JoinHandle<()>>,
 }
 
+#[derive(Clone, Copy)]
+enum Behavior {
+    Healthy,
+    Status(u16),
+    FailReformulatedWorker,
+}
+
 impl MockServer {
     pub(crate) fn start() -> Self {
+        Self::start_with(Behavior::Healthy)
+    }
+
+    pub(crate) fn returning(status: u16) -> Self {
+        Self::start_with(Behavior::Status(status))
+    }
+
+    pub(crate) fn failing_one_worker() -> Self {
+        Self::start_with(Behavior::FailReformulatedWorker)
+    }
+
+    fn start_with(behavior: Behavior) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let addr = listener.local_addr().unwrap();
@@ -27,8 +46,9 @@ impl MockServer {
             while thread_running.load(Ordering::SeqCst) {
                 match listener.accept() {
                     Ok((stream, _)) => {
+                        stream.set_nonblocking(false).unwrap();
                         thread_requests.fetch_add(1, Ordering::SeqCst);
-                        handle_client(stream);
+                        handle_client(stream, behavior);
                     }
                     Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
                         thread::sleep(Duration::from_millis(5));
@@ -64,16 +84,34 @@ impl Drop for MockServer {
     }
 }
 
-fn handle_client(mut stream: TcpStream) {
+fn handle_client(mut stream: TcpStream, behavior: Behavior) {
     let (path, body, headers) = read_request(&mut stream).expect("mock request");
-    let response = match path.as_str() {
-        "/chat/completions" => chat_response(&body),
-        "/search" => search_response(&headers),
-        "/contents" => contents_response(),
-        _ => (
-            404,
-            MockResponse::Error(ErrorResponse { error: "not found" }),
+    let response = match behavior {
+        Behavior::Status(status) => (
+            status,
+            MockResponse::Error(ErrorResponse {
+                error: "injected provider failure",
+            }),
         ),
+        Behavior::FailReformulatedWorker
+            if path == "/chat/completions" && body.contains("Reformulate this question") =>
+        {
+            (
+                500,
+                MockResponse::Error(ErrorResponse {
+                    error: "injected worker failure",
+                }),
+            )
+        }
+        _ => match path.as_str() {
+            "/chat/completions" => chat_response(&body),
+            "/search" => search_response(&headers),
+            "/contents" => contents_response(),
+            _ => (
+                404,
+                MockResponse::Error(ErrorResponse { error: "not found" }),
+            ),
+        },
     };
     write_json(&mut stream, response.0, &response.1);
 }

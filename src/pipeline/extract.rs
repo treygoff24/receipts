@@ -25,10 +25,18 @@ pub fn extract_claims(
     answer: &str,
     chat: &dyn ChatProvider,
 ) -> Vec<ExtractedClaim> {
+    try_extract_claims(subquestion, answer, chat).unwrap_or_default()
+}
+
+fn try_extract_claims(
+    subquestion: &str,
+    answer: &str,
+    chat: &dyn ChatProvider,
+) -> Result<Vec<ExtractedClaim>, crate::error::ReceiptsError> {
     let prompt = format!(
         "Question: {subquestion}\n\nResearch answer:\n{answer}\n\nExtract the atomic factual claims with their source URLs (only claims that cite a URL). At most {MAX_CLAIMS_PER_WORKER} claims."
     );
-    let parsed: Result<ClaimsOutput, _> = chat_json(
+    let parsed: ClaimsOutput = chat_json(
         chat,
         &[Message::user(prompt)],
         ChatOpts {
@@ -36,23 +44,25 @@ pub fn extract_claims(
             response_format: Some(ResponseFormat::Claims),
             ..ChatOpts::default()
         },
-    );
-    parsed.map(|output| output.claims).unwrap_or_default()
+    )?;
+    Ok(parsed.claims)
 }
 
 pub(crate) fn extract_candidates(
     answer: WorkerAnswer,
     chat: &dyn ChatProvider,
-) -> Vec<ClaimCandidate> {
-    extract_claims(&answer.subquestion, &answer.answer, chat)
-        .into_iter()
-        .map(|claim| ClaimCandidate {
-            subquestion: answer.subquestion.clone(),
-            claim: claim.claim,
-            url: claim.url,
-            relevance: Relevance::Direct,
-        })
-        .collect()
+) -> Result<Vec<ClaimCandidate>, crate::error::ReceiptsError> {
+    Ok(
+        try_extract_claims(&answer.subquestion, &answer.answer, chat)?
+            .into_iter()
+            .map(|claim| ClaimCandidate {
+                subquestion: answer.subquestion.clone(),
+                claim: claim.claim,
+                url: claim.url,
+                relevance: Relevance::Direct,
+            })
+            .collect(),
+    )
 }
 
 pub(crate) fn dedup_candidates(candidates: Vec<ClaimCandidate>) -> Vec<ClaimCandidate> {

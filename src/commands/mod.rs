@@ -73,7 +73,7 @@ pub fn run() -> i32 {
             }
             err.exit();
         }
-        Err(err) => return emit_parse_error(&raw_args, err),
+        Err(err) => return emit_parse_error(&raw_args, err, force_json),
     };
 
     let command_name = command_name(&cli.command);
@@ -121,14 +121,14 @@ fn command_name(command: &Commands) -> &'static str {
     }
 }
 
-fn emit_parse_error(raw_args: &[std::ffi::OsString], err: clap::Error) -> i32 {
+fn emit_parse_error(raw_args: &[std::ffi::OsString], err: clap::Error, force_json: bool) -> i32 {
     let message = clean_clap_message(&err.to_string());
     let suggested_fix = suggested_fix(raw_args, &message);
     let command = parse_command_name(raw_args);
-    let receipts_err = crate::error::ReceiptsError::usage(format!("usage error: {message}"))
-        .with_suggested_fix(suggested_fix);
+    let receipts_err =
+        crate::error::ReceiptsError::usage(message).with_suggested_fix(suggested_fix);
     let envelope = ErrorEnvelope::from_error(command, &receipts_err, None);
-    emit_error(&envelope, false)
+    emit_error(&envelope, force_json)
 }
 
 fn clean_clap_message(message: &str) -> String {
@@ -142,20 +142,17 @@ fn clean_clap_message(message: &str) -> String {
 }
 
 fn parse_command_name(args: &[std::ffi::OsString]) -> &'static str {
-    for arg in args.iter().skip(1) {
-        let text = arg.to_string_lossy();
-        if text.starts_with('-') {
-            continue;
-        }
-        return match text.as_ref() {
-            "ask" => "ask",
-            "doctor" => "doctor",
-            "capabilities" => "capabilities",
-            "schema" => "schema",
-            _ => "receipts",
-        };
+    let normalized = args_with_default_ask(args.to_vec());
+    let Some(idx) = crate::cli::first_commandish_arg(&normalized) else {
+        return "receipts";
+    };
+    match normalized[idx].to_string_lossy().as_ref() {
+        "ask" => "ask",
+        "doctor" => "doctor",
+        "capabilities" => "capabilities",
+        "schema" => "schema",
+        _ => "receipts",
     }
-    "receipts"
 }
 
 fn suggested_fix(args: &[std::ffi::OsString], message: &str) -> String {

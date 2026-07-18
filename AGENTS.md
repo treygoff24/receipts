@@ -91,6 +91,8 @@ Error envelope (`receipts.cli.error.v1`, stderr): `error.code`, `error.message`,
 
 Exit 10 is the one non-obvious case: nonzero exit but stdout has usable verified claims. Handle it as a soft success.
 
+If every collected failure is a retryable provider error and no claim survives, `ask` emits the corresponding exit 4/5/6 error envelope instead of a successful empty result. Mixed runs with at least one surviving claim still exit 0 and list provider failures in `data.uncertainties`.
+
 ## Machine self-description
 
 ```sh

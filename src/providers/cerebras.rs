@@ -331,7 +331,7 @@ impl CerebrasClient {
         let (raw, retries) = run_with_retries(
             Provider::Cerebras,
             || self.post_json(&url, &body),
-            &std::thread::sleep,
+            &crate::providers::sleep_before_retry,
         )?;
         let mut response = parse_chat_response(&raw)?;
         response.wall_time_ms = start.elapsed().as_millis() as u64;

@@ -175,10 +175,17 @@ fn render_success_human<T: Serialize>(env: &SuccessEnvelope<T>) {
 }
 
 fn render_error_human(env: &ErrorEnvelope) {
-    eprintln!(
-        "receipts {} — error [{}] (requestId {})",
-        env.command, env.error.code, env.request_id
-    );
+    if env.command == "receipts" {
+        eprintln!(
+            "receipts — error [{}] (requestId {})",
+            env.error.code, env.request_id
+        );
+    } else {
+        eprintln!(
+            "receipts {} — error [{}] (requestId {})",
+            env.command, env.error.code, env.request_id
+        );
+    }
     eprintln!("{}", env.error.message);
     if let Some(provider) = &env.error.provider {
         eprintln!("provider: {provider}");
