@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.0
+
+**Behavior change:** `ask` now exits 4 (`network`), 5 (`upstream`), or 6 (`rate_limited`) when a total provider outage leaves zero claims. These runs previously exited 0 with an empty, successful-looking answer. This is a minor version bump because agents that key on the documented retryable exit codes now receive the retry signal the contract always promised; partial failures with surviving claims still exit 0 and remain visible in `data.uncertainties`.
+
+- Usage and config error envelopes are now consistent and actionable: `usage error:` appears once, `--json` is honored for argument-parse failures under a TTY, flag-value parse errors report the correct `command`, and config errors include `suggestedFix` naming the invalid file or environment value and the allowed options. Human usage output no longer duplicates the `receipts` command name.
+
+- Five internal cleanup passes consolidated pipeline and provider code, strengthened typed envelope/schema/capabilities coverage, and removed the unused `predicates` test dependency without intentionally changing the public contract.
+
+- Marked the old pre-rename `recon` design documents as historical and pointed readers to the current `receipts` contract.
+
 ## 0.2.1
 
 Fixed the outbound User-Agent header pointing at a nonexistent repo path (treygoff → treygoff24) and replaced project-specific test fixture strings with generic placeholders. No behavior changes.
